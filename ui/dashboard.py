@@ -8,9 +8,14 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QScrollArea, QSizePolicy, QGridLayout,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor, QPainter, QBrush, QPen
-from PyQt6.QtCharts import QChart, QChartView, QBarSet, QHorizontalBarSeries, QBarCategoryAxis, QValueAxis
+
+try:
+    from PyQt6.QtCharts import QChart, QChartView, QBarSet, QHorizontalBarSeries, QBarCategoryAxis, QValueAxis
+    CHARTS_DISPONIBLE = True
+except ImportError:
+    CHARTS_DISPONIBLE = False
 
 import database
 
@@ -111,10 +116,17 @@ class Dashboard(QWidget):
         lbl_statuts = QLabel("Répartition par statut")
         lbl_statuts.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         statuts_layout.addWidget(lbl_statuts)
-        self.vue_graphique = QChartView()
-        self.vue_graphique.setMinimumHeight(250)
-        self.vue_graphique.setRenderHint(QPainter.RenderHint.Antialiasing)
-        statuts_layout.addWidget(self.vue_graphique)
+
+        if CHARTS_DISPONIBLE:
+            self.vue_graphique = QChartView()
+            self.vue_graphique.setMinimumHeight(250)
+            self.vue_graphique.setRenderHint(QPainter.RenderHint.Antialiasing)
+            statuts_layout.addWidget(self.vue_graphique)
+        else:
+            self.vue_graphique = None
+            self.container_graphique_texte = QVBoxLayout()
+            statuts_layout.addLayout(self.container_graphique_texte)
+
         ligne_graphiques.addWidget(grp_statuts, 3)
 
         # Top départements
@@ -209,39 +221,51 @@ class Dashboard(QWidget):
             self.container_recents.addLayout(ligne)
 
     def _construire_graphique_statuts(self, par_statut):
-        """Construit le graphique horizontal par statut."""
-        chart = QChart()
-        chart.setAnimationOptions(QChart.AnimationOption.SeriesAnimations)
-        chart.legend().setVisible(False)
-        chart.setBackgroundVisible(False)
-        chart.setMargins(chart.margins().__class__(4, 4, 4, 4))
+        """Construit le graphique horizontal par statut (ou version texte si charts indisponible)."""
+        if CHARTS_DISPONIBLE and self.vue_graphique:
+            chart = QChart()
+            chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
+            chart.legend().setVisible(False)
+            chart.setBackgroundVisible(False)
 
-        categories = []
-        serie = QHorizontalBarSeries()
+            categories = []
+            serie = QHorizontalBarSeries()
 
-        for statut, nb in par_statut:
-            bar_set = QBarSet(statut)
-            couleur = COULEURS_STATUTS.get(statut, "#90A4AE")
-            bar_set.setColor(QColor(couleur))
-            bar_set.append(nb)
-            bar_set.setLabel(str(nb))
-            serie.append(bar_set)
-            categories.append(f"{statut} ({nb})")
+            for statut, nb in par_statut:
+                bar_set = QBarSet(statut)
+                couleur = COULEURS_STATUTS.get(statut, "#90A4AE")
+                bar_set.setColor(QColor(couleur))
+                bar_set.append(nb)
+                serie.append(bar_set)
+                categories.append(f"{statut} ({nb})")
 
-        chart.addSeries(serie)
+            chart.addSeries(serie)
 
-        axe_y = QBarCategoryAxis()
-        axe_y.append(categories)
-        chart.addAxis(axe_y, Qt.AlignmentFlag.AlignLeft)
-        serie.attachAxis(axe_y)
+            axe_y = QBarCategoryAxis()
+            axe_y.append(categories)
+            chart.addAxis(axe_y, Qt.AlignmentFlag.AlignLeft)
+            serie.attachAxis(axe_y)
 
-        axe_x = QValueAxis()
-        axe_x.setLabelFormat("%d")
-        chart.addAxis(axe_x, Qt.AlignmentFlag.AlignBottom)
-        serie.attachAxis(axe_x)
+            axe_x = QValueAxis()
+            axe_x.setLabelFormat("%d")
+            chart.addAxis(axe_x, Qt.AlignmentFlag.AlignBottom)
+            serie.attachAxis(axe_x)
 
-        chart.setTitle("")
-        self.vue_graphique.setChart(chart)
+            self.vue_graphique.setChart(chart)
+        else:
+            # Fallback texte si PyQt6-Charts non disponible
+            self._vider_layout(self.container_graphique_texte)
+            for statut, nb in par_statut:
+                couleur = COULEURS_STATUTS.get(statut, "#888")
+                ligne = QHBoxLayout()
+                lbl = QLabel(statut)
+                lbl.setStyleSheet(f"color: {couleur}; font-weight: bold; font-size: 12px;")
+                ligne.addWidget(lbl)
+                ligne.addStretch()
+                lbl_nb = QLabel(str(nb))
+                lbl_nb.setStyleSheet("font-size: 12px; font-weight: bold;")
+                ligne.addWidget(lbl_nb)
+                self.container_graphique_texte.addLayout(ligne)
 
     def _vider_layout(self, layout):
         """Vide récursivement un layout."""
