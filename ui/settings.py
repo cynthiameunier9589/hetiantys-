@@ -144,6 +144,29 @@ class PageParametres(QWidget):
 
         layout.addWidget(grp_import)
 
+        # ── Zone danger ──
+        grp_danger = QGroupBox("Zone danger")
+        grp_danger.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid #ef9a9a; border-radius: 6px; "
+            "margin-top: 8px; padding-top: 8px; color: #c62828; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; }"
+        )
+        danger_layout = QVBoxLayout(grp_danger)
+
+        self.btn_vider_base = QPushButton("Vider toute la base de données")
+        self.btn_vider_base.setStyleSheet(
+            "QPushButton { background: #c62828; color: white; border-radius: 4px; padding: 8px 16px; }"
+            "QPushButton:pressed { background: #b71c1c; }"
+        )
+        self.btn_vider_base.clicked.connect(self._vider_base)
+        danger_layout.addWidget(self.btn_vider_base)
+
+        hint_danger = QLabel("Supprime toutes les fiches, notes et historiques. Irréversible.")
+        hint_danger.setStyleSheet("color: #c62828; font-size: 11px;")
+        danger_layout.addWidget(hint_danger)
+
+        layout.addWidget(grp_danger)
+
         # Bouton sauvegarder
         layout.addStretch()
         self.btn_sauvegarder = QPushButton("Sauvegarder les paramètres")
@@ -249,6 +272,25 @@ class PageParametres(QWidget):
             )
         except Exception as e:
             QMessageBox.critical(self, "Erreur d'export", str(e))
+
+    def _vider_base(self):
+        chemin_db = self.input_chemin_db.text().strip() or self.config.get("chemin_db", "")
+        if not chemin_db:
+            QMessageBox.warning(self, "Base manquante", "Configurez d'abord un chemin de base de données.")
+            return
+        rep = QMessageBox.question(
+            self,
+            "Confirmer la suppression",
+            "Êtes-vous sûr de vouloir supprimer TOUTES les fiches ?\nCette action est irréversible.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if rep != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            nb = database.vider_base(chemin_db)
+            QMessageBox.information(self, "Base vidée", f"{nb} fiche(s) supprimée(s).")
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", str(e))
 
     def _sauvegarder(self):
         prenom = self.input_prenom.text().strip()

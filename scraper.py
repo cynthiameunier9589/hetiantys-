@@ -159,8 +159,10 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
     """
     prefixe = _prefixe_cp(departement)
 
+    # bbox France métropolitaine + DOM : lat 41.3–51.1, lon -5.2–9.6
+    # Indispensable pour que "^42" ne matche pas des codes postaux chinois/russes
     query = (
-        f'[out:json][timeout:90];'
+        f'[out:json][timeout:90][bbox:41.3,-5.2,51.1,9.6];'
         f'('
         f'node[shop=chemist]["addr:postcode"~"^{prefixe}"];'
         f'way[shop=chemist]["addr:postcode"~"^{prefixe}"];'

@@ -257,6 +257,16 @@ def supprimer_pharmacie(db_path: str, pharmacie_id: int) -> None:
         conn.execute("DELETE FROM pharmacies WHERE id = ?", (pharmacie_id,))
 
 
+def vider_base(db_path: str) -> int:
+    """Supprime toutes les pharmacies (et données associées). Retourne le nombre supprimé."""
+    with get_connection(db_path) as conn:
+        nb = conn.execute("SELECT COUNT(*) FROM pharmacies").fetchone()[0]
+        conn.execute("DELETE FROM pharmacies")
+        conn.execute("DELETE FROM notes")
+        conn.execute("DELETE FROM historique_statuts")
+        return nb
+
+
 # ─── NOTES ─────────────────────────────────────────────────────────────────────
 
 def ajouter_note(db_path: str, pharmacie_id: int, contenu: str, auteur: str) -> int:
