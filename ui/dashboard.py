@@ -162,7 +162,10 @@ class Dashboard(QWidget):
 
     def actualiser(self):
         """Recharge toutes les statistiques depuis la base."""
-        stats = database.get_statistiques(self.db_path)
+        try:
+            stats = database.get_statistiques(self.db_path)
+        except Exception:
+            return
 
         # KPI
         self.kpi_total.findChildren(QLabel)[0].setText(str(stats["total"]))

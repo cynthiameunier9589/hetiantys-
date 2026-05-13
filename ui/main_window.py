@@ -159,7 +159,9 @@ class MainWindow(QMainWindow):
         self.page_parametres.config_modifiee.connect(self._on_config_modifiee)
         self.stack.addWidget(self.page_parametres)  # index 3
 
-        self._naviguer("dashboard")
+        # Délai pour laisser la fenêtre s'afficher avant de charger les données
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(300, lambda: self._naviguer("dashboard"))
 
     def _naviguer(self, cle: str):
         """Navigue vers une section de l'application."""
