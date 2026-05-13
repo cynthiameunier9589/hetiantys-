@@ -6,21 +6,25 @@ Création des tables, fonctions CRUD pour pharmacies, notes, historique et param
 import sqlite3
 import os
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
-    """Retourne une connexion SQLite avec support des clés étrangères."""
-    conn = sqlite3.connect(db_path, timeout=30)
+    """Retourne une connexion SQLite robuste, compatible Mac et réseau OneDrive."""
+    conn = sqlite3.connect(db_path, timeout=60)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
+    # WAL désactivé car problématique sur OneDrive/réseau Mac
+    conn.execute("PRAGMA journal_mode = DELETE")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
 def initialiser_base(db_path: str) -> None:
     """Crée toutes les tables si elles n'existent pas déjà."""
-    os.makedirs(os.path.dirname(db_path), exist_ok=True) if os.path.dirname(db_path) else None
+    dossier = os.path.dirname(db_path)
+    if dossier:
+        os.makedirs(dossier, exist_ok=True)
 
     with get_connection(db_path) as conn:
         conn.executescript("""
@@ -198,11 +202,6 @@ def lister_pharmacies(
         return conn.execute(sql, params).fetchall()
 
 
-def compter_pharmacies(db_path: str, **filtres) -> int:
-    """Retourne le nombre de pharmacies correspondant aux filtres."""
-    return len(lister_pharmacies(db_path, **filtres))
-
-
 def get_departements(db_path: str) -> List[str]:
     """Retourne la liste des départements présents dans la base."""
     with get_connection(db_path) as conn:
@@ -268,7 +267,6 @@ def ajouter_note(db_path: str, pharmacie_id: int, contenu: str, auteur: str) -> 
             "INSERT INTO notes (pharmacie_id, contenu, date_heure, auteur) VALUES (?, ?, ?, ?)",
             (pharmacie_id, contenu, now, auteur)
         )
-        # Mise à jour de la date de modification de la pharmacie
         conn.execute(
             "UPDATE pharmacies SET date_modification = ?, date_dernier_contact = ? WHERE id = ?",
             (now, now, pharmacie_id)
