@@ -1,6 +1,12 @@
 """
-Module de scraping des pharmacies par département.
-Sources : API annuaire santé (FHIR) + Pages Jaunes.
+Scraper de pharmacies françaises par département.
+
+Sources combinées (par ordre de fiabilité) :
+  1. API Annuaire Santé FHIR (type=SA25) — données officielles, complètes
+  2. Overpass API / OpenStreetMap — couverture complémentaire ~70%
+  3. Pages Jaunes — enrichissement email/téléphone
+
+Aucune source ne bloque les requêtes si on respecte les délais polis.
 """
 
 import logging
@@ -23,231 +29,344 @@ USER_AGENTS = [
 ]
 
 REGIONS_DEPARTEMENTS = {
-    "Auvergne-Rhône-Alpes": ["01", "03", "07", "15", "26", "38", "42", "43", "63", "69", "73", "74"],
-    "Bourgogne-Franche-Comté": ["21", "25", "39", "58", "70", "71", "89", "90"],
-    "Bretagne": ["22", "29", "35", "56"],
-    "Centre-Val de Loire": ["18", "28", "36", "37", "41", "45"],
-    "Corse": ["2A", "2B"],
-    "Grand Est": ["08", "10", "51", "52", "54", "55", "57", "67", "68", "88"],
-    "Hauts-de-France": ["02", "59", "60", "62", "80"],
-    "Île-de-France": ["75", "77", "78", "91", "92", "93", "94", "95"],
-    "Normandie": ["14", "27", "50", "61", "76"],
-    "Nouvelle-Aquitaine": ["16", "17", "19", "23", "24", "33", "40", "47", "64", "79", "86", "87"],
-    "Occitanie": ["09", "11", "12", "30", "31", "32", "34", "46", "48", "65", "66", "81", "82"],
-    "Pays de la Loire": ["44", "49", "53", "72", "85"],
-    "Provence-Alpes-Côte d'Azur": ["04", "05", "06", "13", "83", "84"],
-    "DOM-TOM": ["971", "972", "973", "974", "976"],
+    "Auvergne-Rhône-Alpes":     ["01", "03", "07", "15", "26", "38", "42", "43", "63", "69", "73", "74"],
+    "Bourgogne-Franche-Comté":  ["21", "25", "39", "58", "70", "71", "89", "90"],
+    "Bretagne":                 ["22", "29", "35", "56"],
+    "Centre-Val de Loire":      ["18", "28", "36", "37", "41", "45"],
+    "Corse":                    ["2A", "2B"],
+    "Grand Est":                ["08", "10", "51", "52", "54", "55", "57", "67", "68", "88"],
+    "Hauts-de-France":          ["02", "59", "60", "62", "80"],
+    "Ile-de-France":            ["75", "77", "78", "91", "92", "93", "94", "95"],
+    "Normandie":                ["14", "27", "50", "61", "76"],
+    "Nouvelle-Aquitaine":       ["16", "17", "19", "23", "24", "33", "40", "47", "64", "79", "86", "87"],
+    "Occitanie":                ["09", "11", "12", "30", "31", "32", "34", "46", "48", "65", "66", "81", "82"],
+    "Pays de la Loire":         ["44", "49", "53", "72", "85"],
+    "Provence-Alpes-Cote d'Azur": ["04", "05", "06", "13", "83", "84"],
+    "DOM-TOM":                  ["971", "972", "973", "974", "976"],
 }
 
 
-def _headers_json() -> Dict[str, str]:
-    """Headers pour l'API FHIR annuaire santé."""
+# ─────────────────────────────────────────────────────────────────────────────
+# Utilitaires réseau
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get(url: str, headers: dict, timeout: int = 30, params: dict = None) -> Optional[requests.Response]:
+    """GET robuste avec retry sur 429/503 et timeout."""
+    for tentative in range(4):
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+            if resp.status_code in (429, 503):
+                attente = 5 * (tentative + 1)
+                logger.warning(f"HTTP {resp.status_code} — attente {attente}s")
+                time.sleep(attente)
+                continue
+            if resp.status_code == 200:
+                return resp
+            logger.warning(f"HTTP {resp.status_code} pour {url}")
+            return None
+        except requests.exceptions.Timeout:
+            logger.warning(f"Timeout {url} (tentative {tentative + 1})")
+            time.sleep(2 * (tentative + 1))
+        except requests.exceptions.ConnectionError:
+            logger.warning(f"Connexion impossible {url}")
+            return None
+        except Exception as e:
+            logger.error(f"Erreur {url} : {e}")
+            return None
+    return None
+
+
+def _post(url: str, data: dict, timeout: int = 60) -> Optional[requests.Response]:
+    """POST robuste (utilisé pour Overpass)."""
+    try:
+        resp = requests.post(
+            url, data=data,
+            headers={"User-Agent": random.choice(USER_AGENTS)},
+            timeout=timeout
+        )
+        if resp.status_code == 200:
+            return resp
+        return None
+    except Exception as e:
+        logger.error(f"Erreur POST {url} : {e}")
+        return None
+
+
+def _nettoyer_nom(nom: str) -> str:
+    """Normalise le nom d'une pharmacie."""
+    return nom.strip().title() if nom else ""
+
+
+def _nettoyer_tel(tel: str) -> str:
+    """Normalise un numéro de téléphone."""
+    if not tel:
+        return ""
+    tel = tel.strip().replace(" ", "").replace(".", "").replace("-", "")
+    if tel.startswith("+33"):
+        tel = "0" + tel[3:]
+    return tel
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 1 : API Annuaire Santé FHIR (officielle, complète)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fhir_url_departement(departement: str, offset: int = 0) -> str:
+    prefixe = departement.zfill(2)
+    return (
+        "https://api.annuaire.sante.fr/fhir/v1/Organization"
+        f"?type=SA25"
+        f"&address-postalcode={prefixe}*"
+        f"&active=true"
+        f"&_count=200"
+        f"&_offset={offset}"
+    )
+
+
+def _parser_entree_fhir(resource: dict, departement: str) -> Optional[Dict[str, Any]]:
+    """Parse une entrée FHIR Organization et retourne un dict pharmacie."""
+    nom = _nettoyer_nom(resource.get("name", ""))
+    if not nom:
+        return None
+
+    adresses = resource.get("address", [])
+    adresse_data = adresses[0] if adresses else {}
+    lignes = adresse_data.get("line", [])
+    adresse = " ".join(lignes).strip() or None
+    ville = _nettoyer_nom(adresse_data.get("city", ""))
+    cp = adresse_data.get("postalCode", "")
+
+    telecoms = resource.get("telecom", [])
+    telephone = next(
+        (_nettoyer_tel(t.get("value", "")) for t in telecoms if t.get("system") == "phone"), ""
+    )
+    email = next(
+        (t.get("value", "") for t in telecoms if t.get("system") == "email"), ""
+    )
+
+    if not cp:
+        return None
+
     return {
+        "nom": nom,
+        "adresse": adresse,
+        "ville": ville or None,
+        "code_postal": cp,
+        "departement": departement,
+        "telephone": telephone or None,
+        "email": email or None,
+        "source": "scraping_data_gouv",
+    }
+
+
+def scraper_annuaire_sante(departement: str, callback=None) -> List[Dict[str, Any]]:
+    """
+    Scrape l'API officielle annuaire santé (FHIR) avec le code SA25 (officines).
+    Gère la pagination automatiquement.
+    """
+    pharmacies = []
+    headers = {
         "Accept": "application/fhir+json, application/json",
         "User-Agent": random.choice(USER_AGENTS),
     }
 
-
-def _headers_web() -> Dict[str, str]:
-    """Headers pour le scraping web."""
-    return {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "fr-FR,fr;q=0.9",
-    }
-
-
-def _get(url: str, headers: dict, timeout: int = 20) -> Optional[requests.Response]:
-    """Requête GET avec gestion d'erreurs et retry sur 429."""
-    for tentative in range(3):
-        try:
-            resp = requests.get(url, headers=headers, timeout=timeout)
-            if resp.status_code == 429:
-                time.sleep(5 * (tentative + 1))
-                continue
-            if resp.status_code == 200:
-                return resp
-            return None
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"Erreur réseau {url} : {e}")
-            if tentative < 2:
-                time.sleep(2)
-    return None
-
-
-# ─── SOURCE 1 : API Annuaire Santé (FHIR) ─────────────────────────────────────
-
-def scraper_api_sante_departement(departement: str, callback=None) -> List[Dict[str, Any]]:
-    """
-    Interroge l'API FHIR annuaire santé avec le préfixe département.
-    Utilise address-postalcode avec préfixe pour couvrir tout le département.
-    """
-    pharmacies = []
-    prefixe = departement.zfill(2) if len(departement) <= 2 else departement
-
-    # Recherche par préfixe de code postal (ex: 42 couvre tous les 42xxx)
-    url = (
-        f"https://api.annuaire.sante.fr/fhir/v1/Organization"
-        f"?type=PHAR"
-        f"&address-postalcode={prefixe}*"
-        f"&_count=200"
-        f"&active=true"
-    )
-
     if callback:
-        callback(f"  → API annuaire santé : département {departement}...")
+        callback(f"  [API Sante] Departement {departement} — requete en cours...")
 
-    resp = _get(url, _headers_json())
-    if not resp:
-        if callback:
-            callback(f"  ✗ API santé non disponible pour le département {departement}")
-        return pharmacies
+    offset = 0
+    page = 0
+    total_annonce = None
 
-    try:
-        data = resp.json()
+    while True:
+        url = _fhir_url_departement(departement, offset)
+        resp = _get(url, headers, timeout=30)
+
+        if not resp:
+            if callback:
+                callback(f"  [API Sante] Indisponible (pas de connexion ou timeout)")
+            break
+
+        try:
+            data = resp.json()
+        except Exception:
+            if callback:
+                callback(f"  [API Sante] Reponse invalide")
+            break
+
+        if total_annonce is None:
+            total_annonce = data.get("total", 0)
+            if callback:
+                callback(f"  [API Sante] {total_annonce} pharmacies trouvees dans le departement {departement}")
+
         entrees = data.get("entry", [])
-        total = data.get("total", 0)
-
-        if callback:
-            callback(f"  ✓ API santé : {total} établissements trouvés")
+        if not entrees:
+            break
 
         for entree in entrees:
             resource = entree.get("resource", {})
-            nom = resource.get("name", "").strip()
-            if not nom:
-                continue
+            pharm = _parser_entree_fhir(resource, departement)
+            if pharm:
+                pharmacies.append(pharm)
 
-            # Adresse
-            adresses = resource.get("address", [])
-            adresse_data = adresses[0] if adresses else {}
-            lignes = adresse_data.get("line", [])
-            adresse = " ".join(lignes).strip()
-            ville = adresse_data.get("city", "").title()
-            cp = adresse_data.get("postalCode", "")
-
-            # Téléphone
-            telecoms = resource.get("telecom", [])
-            telephone = next(
-                (t.get("value", "") for t in telecoms if t.get("system") == "phone"), ""
-            )
-
-            if nom and cp:
-                pharmacies.append({
-                    "nom": nom.title(),
-                    "adresse": adresse or None,
-                    "ville": ville or None,
-                    "code_postal": cp,
-                    "departement": departement,
-                    "telephone": telephone or None,
-                    "source": "scraping_data_gouv",
-                })
-
-        # Pagination : récupérer les pages suivantes
+        # Vérifier s'il y a une page suivante via les liens FHIR
         liens = data.get("link", [])
-        url_suivante = next(
-            (l.get("url") for l in liens if l.get("relation") == "next"), None
-        )
+        url_next = next((l.get("url") for l in liens if l.get("relation") == "next"), None)
 
-        page = 1
-        while url_suivante and page < 10:
-            time.sleep(0.5)
-            resp_suiv = _get(url_suivante, _headers_json())
-            if not resp_suiv:
-                break
-            data_suiv = resp_suiv.json()
-            for entree in data_suiv.get("entry", []):
-                resource = entree.get("resource", {})
-                nom = resource.get("name", "").strip()
-                if not nom:
-                    continue
-                adresses = resource.get("address", [])
-                adresse_data = adresses[0] if adresses else {}
-                lignes = adresse_data.get("line", [])
-                adresse = " ".join(lignes).strip()
-                ville = adresse_data.get("city", "").title()
-                cp = adresse_data.get("postalCode", "")
-                telecoms = resource.get("telecom", [])
-                telephone = next(
-                    (t.get("value", "") for t in telecoms if t.get("system") == "phone"), ""
-                )
-                if nom and cp:
-                    pharmacies.append({
-                        "nom": nom.title(),
-                        "adresse": adresse or None,
-                        "ville": ville or None,
-                        "code_postal": cp,
-                        "departement": departement,
-                        "telephone": telephone or None,
-                        "source": "scraping_data_gouv",
-                    })
-            liens = data_suiv.get("link", [])
-            url_suivante = next(
-                (l.get("url") for l in liens if l.get("relation") == "next"), None
-            )
+        if url_next:
+            offset += len(entrees)
             page += 1
+            if page > 20:  # Sécurité max 4000 résultats
+                break
+            time.sleep(0.3)
+        else:
+            break
 
-    except Exception as e:
-        logger.error(f"Erreur parsing API santé département {departement} : {e}")
-        if callback:
-            callback(f"  ✗ Erreur parsing : {e}")
+    if callback:
+        callback(f"  [API Sante] {len(pharmacies)} pharmacies recuperees")
 
     return pharmacies
 
 
-# ─── SOURCE 2 : Pages Jaunes ───────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 2 : Overpass API (OpenStreetMap) — couverture complémentaire
+# ─────────────────────────────────────────────────────────────────────────────
 
-def scraper_pages_jaunes_ville(ville: str, code_postal: str) -> List[Dict[str, Any]]:
-    """Scrape Pages Jaunes pour les pharmacies d'une ville."""
-    terme_lieu = f"{ville.replace(' ', '-')}-{code_postal}"
-    url = f"https://www.pagesjaunes.fr/annuaire/chercherlespros?quoiqui=pharmacie&ou={terme_lieu}"
+def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
+    """
+    Scrape les pharmacies via OpenStreetMap (Overpass API).
+    Fiable, rapide, couvre ~70% des officines françaises.
+    """
+    prefixe = departement.zfill(2)
+
+    query = (
+        f'[out:json][timeout:60];'
+        f'('
+        f'node[amenity=pharmacy]["addr:postcode"~"^{prefixe}"];'
+        f'way[amenity=pharmacy]["addr:postcode"~"^{prefixe}"];'
+        f');'
+        f'out center;'
+    )
+
+    if callback:
+        callback(f"  [OpenStreetMap] Departement {departement} — requete en cours...")
+
+    resp = _post("https://overpass-api.de/api/interpreter", {"data": query}, timeout=90)
+    if not resp:
+        if callback:
+            callback(f"  [OpenStreetMap] Indisponible")
+        return []
 
     pharmacies = []
-    resp = _get(url, _headers_web())
+    try:
+        data = resp.json()
+        elements = data.get("elements", [])
+
+        if callback:
+            callback(f"  [OpenStreetMap] {len(elements)} pharmacies trouvees")
+
+        for el in elements:
+            tags = el.get("tags", {})
+            nom = _nettoyer_nom(tags.get("name", tags.get("operator", "")))
+            if not nom:
+                continue
+
+            cp = tags.get("addr:postcode", "")
+            if not cp.startswith(prefixe):
+                continue
+
+            ville = _nettoyer_nom(
+                tags.get("addr:city") or tags.get("addr:municipality") or tags.get("addr:town") or ""
+            )
+            num = tags.get("addr:housenumber", "")
+            rue = tags.get("addr:street", "")
+            adresse = f"{num} {rue}".strip() or None
+
+            telephone = _nettoyer_tel(
+                tags.get("phone") or tags.get("contact:phone") or ""
+            )
+            email = tags.get("email") or tags.get("contact:email") or ""
+
+            pharmacies.append({
+                "nom": nom,
+                "adresse": adresse,
+                "ville": ville or None,
+                "code_postal": cp,
+                "departement": departement,
+                "telephone": telephone or None,
+                "email": email or None,
+                "source": "scraping_data_gouv",
+            })
+
+    except Exception as e:
+        logger.error(f"Erreur Overpass département {departement} : {e}")
+        if callback:
+            callback(f"  [OpenStreetMap] Erreur parsing : {e}")
+
+    return pharmacies
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE 3 : Pages Jaunes — enrichissement téléphone/email
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scraper_pages_jaunes_ville(ville: str, code_postal: str) -> List[Dict[str, Any]]:
+    """Scrape Pages Jaunes pour enrichir une ville avec emails/téléphones."""
+    ville_url = ville.lower().replace(" ", "-").replace("'", "-")
+    url = (
+        f"https://www.pagesjaunes.fr/annuaire/chercherlespros"
+        f"?quoiqui=pharmacie&ou={ville_url}-{code_postal}"
+    )
+
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9",
+        "Referer": "https://www.pagesjaunes.fr/",
+    }
+
+    pharmacies = []
+    resp = _get(url, headers, timeout=20)
     if not resp:
         return pharmacies
 
     try:
         soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Sélecteurs Pages Jaunes (plusieurs formats possibles)
         fiches = (
             soup.select("article.bi-generic")
             or soup.select("li.bi-item")
-            or soup.select("[data-bi-name]")
+            or soup.select("[data-bi-id]")
         )
 
         for fiche in fiches:
             nom_el = (
                 fiche.select_one(".bi-denomination")
-                or fiche.select_one("h3.bi-denomination")
+                or fiche.select_one("h3")
                 or fiche.select_one(".denomination-base")
             )
             if not nom_el:
                 continue
-            nom = nom_el.get_text(strip=True)
+            nom = _nettoyer_nom(nom_el.get_text(strip=True))
             if not nom:
                 continue
 
-            adresse_el = fiche.select_one(".bi-address, .adresse")
-            adresse = adresse_el.get_text(strip=True) if adresse_el else None
-
-            tel_el = fiche.select_one("[data-phone], .bi-phone")
-            telephone = None
-            if tel_el:
-                telephone = tel_el.get("data-phone") or tel_el.get_text(strip=True)
+            tel_el = fiche.select_one("[data-phone]")
+            telephone = _nettoyer_tel(tel_el.get("data-phone", "") if tel_el else "")
 
             email_el = fiche.select_one("a[href^='mailto:']")
-            email = None
+            email = ""
             if email_el:
                 email = email_el.get("href", "").replace("mailto:", "").strip()
+
+            adresse_el = fiche.select_one(".bi-address, .adresse, .street-address")
+            adresse = adresse_el.get_text(strip=True) if adresse_el else None
 
             pharmacies.append({
                 "nom": nom,
                 "adresse": adresse,
                 "ville": ville.title(),
                 "code_postal": code_postal,
-                "telephone": telephone,
-                "email": email,
+                "telephone": telephone or None,
+                "email": email or None,
                 "source": "scraping_pagesjaunes",
             })
 
@@ -257,7 +376,41 @@ def scraper_pages_jaunes_ville(ville: str, code_postal: str) -> List[Dict[str, A
     return pharmacies
 
 
-# ─── ORCHESTRATEUR ──────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# FUSION ET DÉDOUBLONNAGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fusionner(base: Dict, complement: Dict) -> Dict:
+    """Fusionne deux fiches pharmacie — complète les champs vides."""
+    result = dict(base)
+    for cle in ("adresse", "ville", "telephone", "email"):
+        if not result.get(cle) and complement.get(cle):
+            result[cle] = complement[cle]
+    return result
+
+
+def _dedoublonner(pharmacies: List[Dict]) -> List[Dict]:
+    """
+    Dédoublonne par (nom normalisé + code postal).
+    Fusionne les infos complémentaires entre doublons.
+    """
+    index: Dict[tuple, Dict] = {}
+    for pharm in pharmacies:
+        nom_norm = pharm.get("nom", "").lower().strip()
+        cp = str(pharm.get("code_postal", "")).strip()
+        if not nom_norm or not cp:
+            continue
+        cle = (nom_norm, cp)
+        if cle in index:
+            index[cle] = _fusionner(index[cle], pharm)
+        else:
+            index[cle] = pharm
+    return list(index.values())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ORCHESTRATEUR PRINCIPAL
+# ─────────────────────────────────────────────────────────────────────────────
 
 def scraper_departement(
     db_path: str,
@@ -266,8 +419,8 @@ def scraper_departement(
     stop_flag: Optional[list] = None,
 ) -> Dict[str, int]:
     """
-    Scrape toutes les pharmacies d'un département.
-    Combine API annuaire santé + Pages Jaunes sur les villes trouvées.
+    Scrape toutes les pharmacies d'un département depuis toutes les sources.
+    Retourne les compteurs : inserees / doublons / erreurs.
     """
     compteurs = {"inserees": 0, "doublons": 0, "erreurs": 0}
 
@@ -276,49 +429,85 @@ def scraper_departement(
         if callback:
             callback(msg)
 
-    log(f"Démarrage scraping — Département {departement}")
+    def arrete() -> bool:
+        return bool(stop_flag and stop_flag[0])
 
-    if stop_flag and stop_flag[0]:
+    log(f"========================================")
+    log(f"Scraping departement {departement}")
+    log(f"========================================")
+
+    toutes_pharmacies: List[Dict] = []
+
+    # ── Source 1 : API Annuaire Santé ──────────────────────────────────────
+    if not arrete():
+        try:
+            pharmacies_sante = scraper_annuaire_sante(departement, callback=log)
+            toutes_pharmacies.extend(pharmacies_sante)
+        except Exception as e:
+            log(f"  [API Sante] Erreur : {e}")
+
+    # ── Source 2 : OpenStreetMap / Overpass ─────────────────────────────────
+    if not arrete():
+        time.sleep(1)
+        try:
+            pharmacies_osm = scraper_overpass(departement, callback=log)
+            toutes_pharmacies.extend(pharmacies_osm)
+        except Exception as e:
+            log(f"  [OpenStreetMap] Erreur : {e}")
+
+    log(f"Total brut (avant dedoublonnage) : {len(toutes_pharmacies)}")
+
+    # ── Dédoublonnage inter-sources ──────────────────────────────────────────
+    uniques = _dedoublonner(toutes_pharmacies)
+    log(f"Total apres dedoublonnage : {len(uniques)} pharmacies uniques")
+
+    if not uniques:
+        log(f"Aucune pharmacie trouvee dans le departement {departement}.")
+        log(f"Verifiez votre connexion Internet.")
         return compteurs
 
-    # ── Étape 1 : API annuaire santé ──
-    pharmacies_api = scraper_api_sante_departement(departement, callback=log)
-    log(f"  API santé : {len(pharmacies_api)} pharmacies récupérées")
+    # ── Source 3 : Enrichissement Pages Jaunes sur les villes trouvées ──────
+    if not arrete():
+        villes_uniques = {}
+        for p in uniques:
+            v = p.get("ville", "")
+            cp = p.get("code_postal", "")
+            if v and cp and v not in villes_uniques:
+                villes_uniques[v] = cp
 
-    # ── Étape 2 : Pages Jaunes sur les villes trouvées ──
-    villes_vues = set()
-    pharmacies_pj = []
+        nb_villes = len(villes_uniques)
+        log(f"  [Pages Jaunes] Enrichissement sur {nb_villes} villes...")
 
-    for p in pharmacies_api:
-        ville = p.get("ville", "")
-        cp = p.get("code_postal", "")
-        if ville and cp and ville not in villes_vues:
-            villes_vues.add(ville)
-            if stop_flag and stop_flag[0]:
+        enrichissements_pj = []
+        for i, (ville, cp) in enumerate(list(villes_uniques.items())[:20]):  # Max 20 villes
+            if arrete():
                 break
-            time.sleep(random.uniform(1.5, 2.5))
-            log(f"  → Pages Jaunes : {ville} ({cp})")
+            log(f"  [Pages Jaunes] {ville} ({i+1}/{min(nb_villes, 20)})...")
             pj = scraper_pages_jaunes_ville(ville, cp)
-            pharmacies_pj.extend(pj)
+            enrichissements_pj.extend(pj)
+            time.sleep(random.uniform(1.5, 2.5))
 
-    log(f"  Pages Jaunes : {len(pharmacies_pj)} pharmacies récupérées")
+        # Fusionner les enrichissements PJ dans les fiches existantes
+        if enrichissements_pj:
+            index_pj: Dict[tuple, Dict] = {}
+            for p in enrichissements_pj:
+                cle = (p.get("nom", "").lower().strip(), str(p.get("code_postal", "")))
+                if cle[0]:
+                    index_pj[cle] = p
 
-    # ── Fusion et dédoublonnage inter-sources ──
-    toutes = pharmacies_api + pharmacies_pj
-    vus: set = set()
-    uniques = []
-    for p in toutes:
-        cle = (p.get("nom", "").lower().strip(), str(p.get("code_postal", "")))
-        if cle[0] and cle not in vus:
-            vus.add(cle)
-            p.setdefault("departement", departement)
-            uniques.append(p)
+            for i, pharm in enumerate(uniques):
+                cle = (pharm.get("nom", "").lower().strip(), str(pharm.get("code_postal", "")))
+                if cle in index_pj:
+                    uniques[i] = _fusionner(pharm, index_pj[cle])
 
-    log(f"  Total après dédoublonnage : {len(uniques)} pharmacies uniques")
+            log(f"  [Pages Jaunes] {len(enrichissements_pj)} fiches PJ traitees")
 
-    # ── Insertion en base ──
+    # ── Insertion en base de données ─────────────────────────────────────────
+    log(f"Insertion de {len(uniques)} pharmacies en base...")
+
     for pharm in uniques:
-        if stop_flag and stop_flag[0]:
+        if arrete():
+            log("Scraping interrompu.")
             break
         try:
             if pharmacie_existe(
@@ -338,10 +527,12 @@ def scraper_departement(
             compteurs["erreurs"] += 1
             logger.error(f"Erreur insertion {pharm.get('nom')} : {e}")
 
+    log(f"========================================")
     log(
-        f"Département {departement} terminé : "
-        f"{compteurs['inserees']} insérées | "
+        f"TERMINE — {compteurs['inserees']} inserees | "
         f"{compteurs['doublons']} doublons | "
         f"{compteurs['erreurs']} erreurs"
     )
+    log(f"========================================")
+
     return compteurs
