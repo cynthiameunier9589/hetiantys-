@@ -155,7 +155,7 @@ class MainWindow(QMainWindow):
         self.page_fiche.retour_liste.connect(lambda: self._naviguer("pharmacies"))
         self.stack.addWidget(self.page_fiche)  # index 2
 
-        self.page_parametres = PageParametres(config_path, self.config)
+        self.page_parametres = PageParametres(self.config_path, self.config)
         self.page_parametres.config_modifiee.connect(self._on_config_modifiee)
         self.stack.addWidget(self.page_parametres)  # index 3
 
