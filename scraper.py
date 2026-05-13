@@ -133,81 +133,82 @@ def scraper_annuaire_entreprises(departement: str, callback=None) -> List[Dict[s
     """
     Recherche les parapharmacies via l'API officielle Annuaire Entreprises.
     Données SIRENE — sans clé API, sans blocage.
-    Recherche par nom 'parapharmacie' dans le département.
+    Filtre par siege.departement dans la réponse (plus fiable que paramètre URL).
     """
     base_url = "https://recherche-entreprises.api.gouv.fr/search"
     resultats = []
-    total_pages = 1
 
-    if callback:
-        callback(f"  [Annuaire] Recherche parapharmacies dept {departement}...")
+    # Deux termes de recherche pour maximiser la couverture
+    termes = ["parapharmacie", "para pharmacie"]
 
-    for page in range(1, 20):
-        try:
-            resp = _get(base_url, params={
-                "q": "parapharmacie",
-                "code_departement": departement,
-                "page": page,
-                "per_page": 25,
-            }, timeout=20)
+    for terme in termes:
+        if callback:
+            callback(f"  [Annuaire] Recherche '{terme}' dept {departement}...")
 
-            if not resp:
+        total_pages = 1
+        for page in range(1, 50):
+            try:
+                resp = _get(base_url, params={
+                    "q": terme,
+                    "departement": departement,   # paramètre correct de l'API
+                    "page": page,
+                    "per_page": 25,
+                }, timeout=20)
+
+                if not resp:
+                    break
+
+                data = resp.json()
+                total_pages = data.get("total_pages", 1)
+                items = data.get("results", [])
+
+                if not items:
+                    break
+
+                for item in items:
+                    siege = item.get("siege", {})
+
+                    # Filtrage par département depuis la réponse
+                    dept_siege = str(siege.get("departement") or "").strip()
+                    if dept_siege and dept_siege != departement:
+                        continue
+
+                    nom = _nettoyer_nom(
+                        item.get("nom_raison_sociale") or item.get("nom_complet") or ""
+                    )
+                    if not nom:
+                        continue
+
+                    cp = str(siege.get("code_postal") or "").strip()
+                    ville = _nettoyer_nom(siege.get("libelle_commune") or "")
+                    adresse = siege.get("adresse") or None
+                    telephone = _nettoyer_tel(siege.get("telephone") or "")
+
+                    resultats.append({
+                        "nom": nom,
+                        "adresse": adresse,
+                        "ville": ville or None,
+                        "code_postal": cp or None,
+                        "departement": departement,
+                        "telephone": telephone or None,
+                        "email": None,
+                        "source": "annuaire_entreprises",
+                    })
+
                 if callback:
-                    callback(f"  [Annuaire] Pas de réponse page {page}")
+                    callback(f"  [Annuaire] Page {page}/{total_pages}")
+
+                if page >= total_pages:
+                    break
+
+                time.sleep(0.4)
+
+            except Exception as e:
+                logger.error(f"Erreur Annuaire dept {departement} : {e}")
                 break
-
-            data = resp.json()
-            items = data.get("results", [])
-            total_pages = data.get("total_pages", 1)
-
-            if not items:
-                break
-
-            for item in items:
-                siege = item.get("siege", {})
-                nom = _nettoyer_nom(
-                    item.get("nom_raison_sociale") or item.get("nom_complet") or ""
-                )
-                if not nom:
-                    continue
-
-                cp = str(siege.get("code_postal") or "").strip()
-                ville = _nettoyer_nom(siege.get("libelle_commune") or "")
-                adresse = siege.get("adresse") or None
-                telephone = _nettoyer_tel(siege.get("telephone") or "")
-
-                # Vérifier que le CP correspond bien au département
-                prefixe = _prefixe_cp(departement)
-                if cp and not cp.startswith(prefixe):
-                    continue
-
-                resultats.append({
-                    "nom": nom,
-                    "adresse": adresse,
-                    "ville": ville or None,
-                    "code_postal": cp or None,
-                    "departement": departement,
-                    "telephone": telephone or None,
-                    "email": None,
-                    "source": "annuaire_entreprises",
-                })
-
-            if callback:
-                callback(f"  [Annuaire] Page {page}/{total_pages} — {len(items)} résultats")
-
-            if page >= total_pages:
-                break
-
-            time.sleep(0.5)
-
-        except Exception as e:
-            logger.error(f"Erreur Annuaire dept {departement} p{page} : {e}")
-            if callback:
-                callback(f"  [Annuaire] Erreur : {e}")
-            break
 
     if callback:
-        callback(f"  [Annuaire] Total : {len(resultats)} parapharmacies")
+        callback(f"  [Annuaire] Total brut : {len(resultats)} parapharmacies")
 
     return resultats
 
