@@ -2,21 +2,20 @@
 Scraper de parapharmacies françaises par département.
 
 Sources :
-  1. Overpass API (OpenStreetMap) — shop=chemist
-  2. Pages Jaunes — parapharmacie par commune (via geo.api.gouv.fr)
+  1. Overpass API (OpenStreetMap) — shop=chemist + shop=cosmetics
+  2. Pages Jaunes — recherche par département, termes multiples, pagination
 """
 
 import logging
 import time
 import random
 import urllib.parse
-from typing import Callable, Optional, List, Dict, Any, Tuple
+from typing import Callable, Optional, List, Dict, Any
 
 import requests
 import urllib3
 from bs4 import BeautifulSoup
 
-# Désactive les avertissements SSL pour Mac Python 3.9 / LibreSSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from database import inserer_pharmacie, pharmacie_existe
@@ -34,6 +33,11 @@ OVERPASS_MIRRORS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+]
+
+# Termes Pages Jaunes — parapharmacies uniquement (pas les grandes enseignes)
+PJ_TERMES = [
+    "parapharmacie",
 ]
 
 REGIONS_DEPARTEMENTS = {
@@ -86,66 +90,47 @@ def _nettoyer_tel(s: str) -> str:
 
 
 def _get(url: str, headers: dict = None, timeout: int = 25) -> Optional[requests.Response]:
-    """GET robuste avec retry et SSL désactivé (Mac LibreSSL)."""
     if headers is None:
         headers = {"User-Agent": _ua(), "Accept-Language": "fr-FR,fr;q=0.9"}
     for tentative in range(3):
         try:
             resp = requests.get(url, headers=headers, timeout=timeout, verify=False)
             if resp.status_code in (429, 503):
-                wait = 6 * (tentative + 1)
-                logger.warning(f"HTTP {resp.status_code} — attente {wait}s")
-                time.sleep(wait)
+                time.sleep(8 * (tentative + 1))
                 continue
-            logger.debug(f"GET {url[:80]} → HTTP {resp.status_code}")
             return resp if resp.status_code == 200 else None
         except requests.exceptions.Timeout:
-            logger.warning(f"Timeout {url[:60]} (tentative {tentative + 1})")
             time.sleep(3 * (tentative + 1))
         except requests.exceptions.ConnectionError as e:
-            logger.warning(f"Connexion {url[:60]} (tentative {tentative + 1}) : {e}")
+            logger.warning(f"Connexion échouée {url[:60]} : {e}")
             time.sleep(3 * (tentative + 1))
         except Exception as e:
-            logger.error(f"Erreur {url[:60]} : {e}")
+            logger.error(f"Erreur GET {url[:60]} : {e}")
             return None
     return None
 
 
+def _dans_france(lat: float, lon: float) -> bool:
+    """Vérifie que les coordonnées sont en France (métropole + DOM)."""
+    return 41.0 <= lat <= 52.0 and -6.0 <= lon <= 10.0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Communes du département via l'API géo officielle
+# Nom du département via geo.api.gouv.fr
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_communes(departement: str, callback=None) -> List[Tuple[str, str]]:
-    """
-    Retourne la liste (nom_commune, code_postal) via geo.api.gouv.fr.
-    Fallback : liste vide si l'API est inaccessible.
-    """
-    url = (
-        f"https://geo.api.gouv.fr/departements/{departement}/communes"
-        f"?fields=nom,codesPostaux&limit=1000"
-    )
+def _get_nom_departement(departement: str) -> str:
+    """Retourne le nom officiel du département (ex: '42' → 'Loire')."""
     try:
-        resp = requests.get(url, timeout=15, verify=False,
-                            headers={"User-Agent": _ua()})
+        resp = requests.get(
+            f"https://geo.api.gouv.fr/departements/{departement}",
+            timeout=8, verify=False, headers={"User-Agent": _ua()}
+        )
         if resp.status_code == 200:
-            communes = resp.json()
-            result = []
-            for c in communes:
-                nom = c.get("nom", "")
-                codes = c.get("codesPostaux", [])
-                if nom and codes:
-                    result.append((nom, codes[0]))
-            if callback:
-                callback(f"  [geo.api.gouv.fr] {len(result)} communes trouvees pour dept {departement}")
-            return result
-        else:
-            if callback:
-                callback(f"  [geo.api.gouv.fr] HTTP {resp.status_code}")
-    except Exception as e:
-        logger.warning(f"geo.api.gouv.fr : {e}")
-        if callback:
-            callback(f"  [geo.api.gouv.fr] Inaccessible : {e}")
-    return []
+            return resp.json().get("nom", "")
+    except Exception:
+        pass
+    return ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -154,13 +139,12 @@ def _get_communes(departement: str, callback=None) -> List[Tuple[str, str]]:
 
 def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
     """
-    Récupère les parapharmacies via OpenStreetMap (tag shop=chemist).
-    Requête simple pour maximiser la compatibilité avec tous les miroirs.
+    Récupère les parapharmacies via OpenStreetMap.
+    Tags : shop=chemist (parapharmacies indépendantes) + shop=cosmetics (grandes enseignes).
+    Filtrage GPS pour rester en France.
     """
     prefixe = _prefixe_cp(departement)
 
-    # Sans bbox dans la requête (cause des rejets sur certains miroirs).
-    # Le filtrage géographique France se fait après, sur les coordonnées des éléments.
     query = (
         f'[out:json][timeout:90];'
         f'('
@@ -173,44 +157,40 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
     query_enc = urllib.parse.quote(query)
 
     if callback:
-        callback(f"  [OpenStreetMap] Recherche shop=chemist dept {departement}...")
+        callback(f"  [OpenStreetMap] Dept {departement} (chemist + cosmetics)...")
 
     resp = None
     for mirror in OVERPASS_MIRRORS:
         url = f"{mirror}?data={query_enc}"
         if callback:
-            callback(f"  [OpenStreetMap] Essai {mirror.split('/')[2]}...")
+            callback(f"  [OpenStreetMap] Miroir {mirror.split('/')[2]}...")
         resp = _get(url, timeout=100)
         if resp is not None:
             if callback:
-                callback(f"  [OpenStreetMap] Miroir OK : {mirror.split('/')[2]}")
+                callback(f"  [OpenStreetMap] OK : {mirror.split('/')[2]}")
             break
-        if callback:
-            callback(f"  [OpenStreetMap] Miroir indisponible, essai suivant...")
         time.sleep(2)
 
     if resp is None:
         if callback:
-            callback(f"  [OpenStreetMap] Tous les miroirs indisponibles, passage a Pages Jaunes.")
+            callback("  [OpenStreetMap] Tous les miroirs indisponibles.")
         return []
 
-    parapharmacies = []
+    resultats = []
     try:
         data = resp.json()
         elements = data.get("elements", [])
         if callback:
-            callback(f"  [OpenStreetMap] {len(elements)} elements trouves")
+            callback(f"  [OpenStreetMap] {len(elements)} éléments bruts")
 
         for el in elements:
-            # Filtrage géographique : France métropolitaine + DOM uniquement
+            # Filtrage géographique France
             if el.get("type") == "node":
-                lat = el.get("lat", 0)
-                lon = el.get("lon", 0)
+                lat, lon = el.get("lat", 0), el.get("lon", 0)
             else:
                 center = el.get("center", {})
-                lat = center.get("lat", 0)
-                lon = center.get("lon", 0)
-            if not (41.0 <= lat <= 52.0 and -6.0 <= lon <= 10.0):
+                lat, lon = center.get("lat", 0), center.get("lon", 0)
+            if not _dans_france(lat, lon):
                 continue
 
             tags = el.get("tags", {})
@@ -226,16 +206,11 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
                 tags.get("addr:city") or tags.get("addr:municipality")
                 or tags.get("addr:town") or tags.get("addr:village") or ""
             )
-            num = tags.get("addr:housenumber", "")
-            rue = tags.get("addr:street", "")
-            adresse = f"{num} {rue}".strip() or None
-
-            telephone = _nettoyer_tel(
-                tags.get("phone") or tags.get("contact:phone") or ""
-            )
+            adresse = f"{tags.get('addr:housenumber', '')} {tags.get('addr:street', '')}".strip() or None
+            telephone = _nettoyer_tel(tags.get("phone") or tags.get("contact:phone") or "")
             email = tags.get("email") or tags.get("contact:email") or ""
 
-            parapharmacies.append({
+            resultats.append({
                 "nom": nom,
                 "adresse": adresse,
                 "ville": ville or None,
@@ -247,37 +222,33 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
             })
 
         if callback:
-            callback(f"  [OpenStreetMap] {len(parapharmacies)} parapharmacies extraites")
+            callback(f"  [OpenStreetMap] {len(resultats)} parapharmacies en France")
 
     except Exception as e:
         logger.error(f"Erreur parsing Overpass dept {departement} : {e}")
         if callback:
             callback(f"  [OpenStreetMap] Erreur parsing : {e}")
 
-    return parapharmacies
+    return resultats
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SOURCE 2 : Pages Jaunes
+# SOURCE 2 : Pages Jaunes — par département, termes multiples, pagination
 # ─────────────────────────────────────────────────────────────────────────────
 
-def scraper_pages_jaunes(ville: str, code_postal: str, callback=None) -> List[Dict[str, Any]]:
-    """Scrape Pages Jaunes pour une ville — recherche parapharmacie."""
-    ville_url = urllib.parse.quote(f"{ville} {code_postal}")
-    url = f"https://www.pagesjaunes.fr/annuaire/chercherlespros?quoiqui=parapharmacie&ou={ville_url}"
-
+def _scraper_pj_url(url: str, departement: str, code_postal_prefixe: str) -> List[Dict[str, Any]]:
+    """Parse une page de résultats Pages Jaunes et retourne les fiches."""
     headers = {
         "User-Agent": _ua(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "fr-FR,fr;q=0.9",
         "Referer": "https://www.pagesjaunes.fr/",
     }
-
-    resp = _get(url, headers=headers, timeout=20)
+    resp = _get(url, headers=headers, timeout=25)
     if not resp:
         return []
 
-    parapharmacies = []
+    resultats = []
     try:
         soup = BeautifulSoup(resp.text, "html.parser")
         fiches = (
@@ -292,6 +263,7 @@ def scraper_pages_jaunes(ville: str, code_postal: str, callback=None) -> List[Di
                 fiche.select_one(".bi-denomination")
                 or fiche.select_one("h3")
                 or fiche.select_one(".denomination-base")
+                or fiche.select_one("[itemprop='name']")
             )
             if not nom_el:
                 continue
@@ -299,33 +271,89 @@ def scraper_pages_jaunes(ville: str, code_postal: str, callback=None) -> List[Di
             if not nom:
                 continue
 
+            # Téléphone
             tel_el = fiche.select_one("[data-phone]")
             telephone = _nettoyer_tel(tel_el.get("data-phone", "") if tel_el else "")
             if not telephone:
-                tel_el2 = fiche.select_one(".bi-phone, .phone")
-                if tel_el2:
-                    telephone = _nettoyer_tel(tel_el2.get_text(strip=True))
+                for sel in (".bi-phone", ".phone", "[itemprop='telephone']"):
+                    t = fiche.select_one(sel)
+                    if t:
+                        telephone = _nettoyer_tel(t.get_text(strip=True))
+                        break
 
+            # Email
             email_el = fiche.select_one("a[href^='mailto:']")
             email = email_el.get("href", "").replace("mailto:", "").strip() if email_el else ""
 
-            adresse_el = fiche.select_one(".bi-address, .adresse, .street-address")
+            # Adresse
+            adresse_el = fiche.select_one(".bi-address, .adresse, .street-address, [itemprop='streetAddress']")
             adresse = adresse_el.get_text(strip=True) if adresse_el else None
 
-            parapharmacies.append({
+            # Code postal + ville depuis l'adresse ou le markup
+            cp = ""
+            ville = ""
+            cp_el = fiche.select_one("[itemprop='postalCode']")
+            ville_el = fiche.select_one("[itemprop='addressLocality']")
+            if cp_el:
+                cp = cp_el.get_text(strip=True)
+            if ville_el:
+                ville = ville_el.get_text(strip=True).title()
+
+            # Fallback : extraire CP depuis texte adresse
+            if not cp and adresse:
+                import re
+                m = re.search(r'\b(\d{5})\b', adresse)
+                if m:
+                    cp = m.group(1)
+
+            # Garder seulement si CP correspond au département
+            if cp and not cp.startswith(code_postal_prefixe):
+                continue
+
+            resultats.append({
                 "nom": nom,
                 "adresse": adresse,
-                "ville": ville.title(),
-                "code_postal": code_postal,
+                "ville": ville or None,
+                "code_postal": cp or None,
+                "departement": departement,
                 "telephone": telephone or None,
                 "email": email or None,
                 "source": "scraping_pagesjaunes",
             })
 
     except Exception as e:
-        logger.error(f"Erreur Pages Jaunes {ville} : {e}")
+        logger.error(f"Erreur parsing PJ : {e}")
 
-    return parapharmacies
+    return resultats
+
+
+def scraper_pages_jaunes_departement(
+    departement: str,
+    nom_departement: str,
+    terme: str,
+    callback=None,
+) -> List[Dict[str, Any]]:
+    """
+    Scrape Pages Jaunes pour un département entier avec un terme donné.
+    Gère la pagination (jusqu'à 5 pages).
+    """
+    prefixe = _prefixe_cp(departement)
+    ou = urllib.parse.quote(f"{nom_departement} ({departement})")
+    terme_enc = urllib.parse.quote(terme)
+    base_url = f"https://www.pagesjaunes.fr/annuaire/chercherlespros?quoiqui={terme_enc}&ou={ou}"
+
+    resultats = []
+    for page in range(1, 6):
+        url = base_url if page == 1 else f"{base_url}&page={page}"
+        fiches = _scraper_pj_url(url, departement, prefixe)
+        if not fiches:
+            break
+        resultats.extend(fiches)
+        if callback and fiches:
+            callback(f"  [Pages Jaunes] {terme} — page {page} : {len(fiches)} fiches")
+        time.sleep(random.uniform(1.5, 2.5))
+
+    return resultats
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,39 +362,41 @@ def scraper_pages_jaunes(ville: str, code_postal: str, callback=None) -> List[Di
 
 def _fusionner(base: Dict, complement: Dict) -> Dict:
     result = dict(base)
-    for cle in ("adresse", "ville", "telephone", "email"):
+    for cle in ("adresse", "ville", "code_postal", "telephone", "email"):
         if not result.get(cle) and complement.get(cle):
             result[cle] = complement[cle]
     return result
 
 
-def _dedoublonner(parapharmacies: List[Dict]) -> List[Dict]:
+def _dedoublonner(items: List[Dict]) -> List[Dict]:
     index: Dict[tuple, Dict] = {}
-    for p in parapharmacies:
+    sans_cp = []
+    for p in items:
         nom_norm = p.get("nom", "").lower().strip()
-        cp = str(p.get("code_postal", "")).strip()
-        if not nom_norm or not cp:
+        cp = str(p.get("code_postal") or "").strip()
+        if not nom_norm:
+            continue
+        if not cp:
+            sans_cp.append(p)
             continue
         cle = (nom_norm, cp)
         if cle in index:
             index[cle] = _fusionner(index[cle], p)
         else:
             index[cle] = p
-    return list(index.values())
+    return list(index.values()) + sans_cp
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test de connexion
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _tester_connexion(callback=None) -> bool:
+def _tester_connexion() -> bool:
     try:
         resp = requests.get("https://www.google.com", timeout=8, verify=False,
                             headers={"User-Agent": _ua()})
         return resp.status_code == 200
-    except Exception as e:
-        if callback:
-            callback(f"  Test connexion echoue : {e}")
+    except Exception:
         return False
 
 
@@ -382,8 +412,7 @@ def scraper_departement(
 ) -> Dict[str, int]:
     """
     Scrape toutes les parapharmacies d'un département.
-    Sources : OpenStreetMap + Pages Jaunes (via liste communes geo.api.gouv.fr).
-    Les deux sources fonctionnent indépendamment.
+    Sources : OpenStreetMap + Pages Jaunes (par département, termes multiples).
     """
     compteurs = {"inserees": 0, "doublons": 0, "erreurs": 0}
 
@@ -395,15 +424,21 @@ def scraper_departement(
     def arrete() -> bool:
         return bool(stop_flag and stop_flag[0])
 
-    log("=" * 44)
-    log(f"Scraping parapharmacies dept {departement}")
-    log("=" * 44)
+    log("=" * 48)
+    log(f"Scraping parapharmacies — Département {departement}")
+    log("=" * 48)
 
-    log("Test de connexion Internet...")
-    if not _tester_connexion(callback=log):
-        log("ERREUR : Pas d'acces Internet depuis Python.")
+    if not _tester_connexion():
+        log("ERREUR : Pas d'accès Internet.")
         return compteurs
     log("Connexion Internet OK.")
+
+    # Nom du département pour Pages Jaunes
+    nom_dept = _get_nom_departement(departement)
+    if nom_dept:
+        log(f"Département : {nom_dept} ({departement})")
+    else:
+        nom_dept = departement
 
     toutes: List[Dict] = []
 
@@ -412,69 +447,35 @@ def scraper_departement(
         try:
             osm = scraper_overpass(departement, callback=log)
             toutes.extend(osm)
+            log(f"  → OSM : {len(osm)} résultats")
         except Exception as e:
-            log(f"  [OpenStreetMap] Erreur : {e}")
+            log(f"  [OSM] Erreur : {e}")
 
-    # ── Source 2 : Pages Jaunes par commune ────────────────────────────────
+    # ── Source 2 : Pages Jaunes — tous les termes ──────────────────────────
     if not arrete():
-        # Récupérer les communes du département via l'API officielle
-        communes = _get_communes(departement, callback=log)
-
-        # Si l'API géo est inaccessible, utiliser les villes trouvées par OSM
-        if not communes and toutes:
-            villes_osm = {}
-            for p in toutes:
-                v = p.get("ville", "")
-                cp = p.get("code_postal", "")
-                if v and cp:
-                    villes_osm[v] = cp
-            communes = list(villes_osm.items())
-            log(f"  [Pages Jaunes] Utilisation des {len(communes)} villes trouvees par OSM")
-
-        if communes:
-            # Limiter à 40 communes pour éviter les bans
-            communes_a_scraper = communes[:40]
-            log(f"  [Pages Jaunes] Scraping sur {len(communes_a_scraper)} communes...")
-
-            pj_total: List[Dict] = []
-            for i, (ville, cp) in enumerate(communes_a_scraper):
-                if arrete():
-                    break
-                time.sleep(random.uniform(1.2, 2.2))
-                pj = scraper_pages_jaunes(ville, cp, callback=None)
+        log(f"  [Pages Jaunes] Recherche sur {len(PJ_TERMES)} termes...")
+        for terme in PJ_TERMES:
+            if arrete():
+                break
+            try:
+                pj = scraper_pages_jaunes_departement(departement, nom_dept, terme, callback=log)
                 if pj:
-                    log(f"  [Pages Jaunes] {ville} : {len(pj)} fiche(s)")
-                    pj_total.extend(pj)
-
-            if pj_total:
-                # Fusionner avec les données OSM
-                index_osm = {
-                    (p.get("nom", "").lower().strip(), str(p.get("code_postal", ""))): i
-                    for i, p in enumerate(toutes)
-                }
-                for p in pj_total:
-                    cle = (p.get("nom", "").lower().strip(), str(p.get("code_postal", "")))
-                    if cle[0]:
-                        if cle in index_osm:
-                            toutes[index_osm[cle]] = _fusionner(toutes[index_osm[cle]], p)
-                        else:
-                            toutes.append(p)
-
-                log(f"  [Pages Jaunes] {len(pj_total)} fiches traitees")
-        else:
-            log("  [Pages Jaunes] Aucune commune disponible — scraping PJ ignore")
+                    toutes.extend(pj)
+                    log(f"  → PJ '{terme}' : {len(pj)} résultats")
+                time.sleep(random.uniform(1.0, 2.0))
+            except Exception as e:
+                log(f"  [PJ] Erreur '{terme}' : {e}")
 
     log(f"Total brut : {len(toutes)}")
     uniques = _dedoublonner(toutes)
-    log(f"Apres dedoublonnage : {len(uniques)} parapharmacies uniques")
+    log(f"Après dédoublonnage : {len(uniques)} parapharmacies uniques")
 
     if not uniques:
-        log("Aucune parapharmacie trouvee.")
-        log("Causes : OSM sans donnees shop=chemist + Pages Jaunes vide pour ce dept.")
+        log("Aucune parapharmacie trouvée pour ce département.")
         return compteurs
 
     # ── Insertion en base ──────────────────────────────────────────────────
-    log("Insertion en base de donnees...")
+    log("Insertion en base de données...")
     for pharm in uniques:
         if arrete():
             log("Scraping interrompu.")
@@ -497,11 +498,11 @@ def scraper_departement(
             compteurs["erreurs"] += 1
             logger.error(f"Erreur insertion {pharm.get('nom')} : {e}")
 
-    log("=" * 44)
+    log("=" * 48)
     log(
-        f"TERMINE — {compteurs['inserees']} inserees | "
+        f"TERMINÉ — {compteurs['inserees']} insérées | "
         f"{compteurs['doublons']} doublons | "
         f"{compteurs['erreurs']} erreurs"
     )
-    log("=" * 44)
+    log("=" * 48)
     return compteurs
