@@ -62,13 +62,13 @@ class ScrapingDialog(QDialog):
         layout.setSpacing(12)
 
         # Titre
-        titre = QLabel("Scraping de pharmacies par region / departement")
+        titre = QLabel("Scraping de parapharmacies par region / departement")
         titre.setFont(QFont("Arial", 13, QFont.Weight.Bold))
         layout.addWidget(titre)
 
         desc = QLabel(
-            "Sources utilisees : API Annuaire Sante officielle (SA25) + OpenStreetMap + Pages Jaunes.\n"
-            "Les pharmacies trouvees sont ajoutees a la base sans creer de doublons."
+            "Sources utilisees : OpenStreetMap (shop=chemist) + Pages Jaunes.\n"
+            "Les parapharmacies trouvees sont ajoutees a la base sans creer de doublons."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #555; font-size: 12px;")
@@ -200,7 +200,7 @@ class ScrapingDialog(QDialog):
         self._nb_inserees = 0
 
         self._log(f"Demarrage du scraping — Departement {dept}")
-        self._log("Sources : API Annuaire Sante + OpenStreetMap + Pages Jaunes")
+        self._log("Sources : OpenStreetMap + Pages Jaunes (parapharmacies)")
         self._log("Veuillez patienter, cela peut prendre 1 a 3 minutes...")
         self._log("")
 
@@ -238,14 +238,14 @@ class ScrapingDialog(QDialog):
 
         if inserees > 0:
             self.label_resultat.setText(
-                f"Succes : {inserees} pharmacies ajoutees a la base de donnees !"
+                f"Succes : {inserees} parapharmacies ajoutees a la base de donnees !"
             )
             self.label_resultat.setStyleSheet(
                 "font-size: 13px; font-weight: bold; color: #2e7d32; padding: 4px 0;"
             )
         else:
             self.label_resultat.setText(
-                f"Aucune pharmacie trouvee. {doublons} doublons ignores. "
+                f"Aucune parapharmacie trouvee. {doublons} doublons ignores. "
                 f"Verifiez votre connexion Internet."
             )
             self.label_resultat.setStyleSheet(
