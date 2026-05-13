@@ -187,10 +187,8 @@ class MainWindow(QMainWindow):
         db_path = self.config.get("chemin_db", "")
         dialog = ScrapingDialog(db_path, parent=self)
         dialog.exec()
-        try:
-            self.page_liste.actualiser()
-        except Exception:
-            pass
+        # Naviguer vers la liste et la rafraîchir pour afficher les nouvelles pharmacies
+        self._naviguer("pharmacies")
 
     def _on_config_modifiee(self, nouvelle_config: dict):
         self.config = nouvelle_config
