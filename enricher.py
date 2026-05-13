@@ -97,7 +97,6 @@ def enrichir_pappers(nom: str, ville: str, api_token: str) -> Dict[str, Any]:
             return resultat
 
         entreprise = resultats[0]
-        siren = entreprise.get("siren", "")
 
         # Dirigeant principal
         dirigeants = entreprise.get("dirigeants", [])
@@ -112,50 +111,10 @@ def enrichir_pappers(nom: str, ville: str, api_token: str) -> Dict[str, Any]:
             resultat["nom_decidant"] = dirigeants[0].get("nom", "")
             resultat["prenom_decidant"] = dirigeants[0].get("prenom", "")
 
-        # CA exact depuis les bilans comptables
-        if siren:
-            time.sleep(0.5)
-            url_detail = f"https://api.pappers.fr/v2/entreprise?siren={siren}&api_token={api_token}"
-            resp_detail = _get(url_detail)
-            if resp_detail:
-                detail = resp_detail.json()
-                bilans = detail.get("bilans", [])
-                if bilans:
-                    ca = bilans[0].get("chiffre_affaires")
-                    if ca:
-                        resultat["ca_value"] = float(ca)
-                        resultat["ca_tranche"] = _tranche_ca(float(ca))
-
     except Exception as e:
         logger.error(f"Erreur parsing Pappers pour {nom} {ville} : {e}")
 
     return resultat
-
-
-def _tranche_ca(ca: float) -> str:
-    if ca >= 16_000_000:
-        return "16 MF ET PLUS"
-    elif ca >= 12_000_000:
-        return "12 A 16 MF"
-    elif ca >= 10_000_000:
-        return "10 A 12 MF"
-    elif ca >= 8_000_000:
-        return "8 A 10 MF"
-    elif ca >= 7_000_000:
-        return "7 A 8 MF"
-    elif ca >= 6_000_000:
-        return "6 A 7 MF"
-    elif ca >= 5_000_000:
-        return "5 A 6 MF"
-    elif ca >= 4_000_000:
-        return "4 A 5 MF"
-    elif ca >= 3_000_000:
-        return "3 A 4 MF"
-    elif ca >= 2_000_000:
-        return "2 A 3 MF"
-    elif ca >= 1_000_000:
-        return "1 A 2 MF"
-    return ""
 
 
 # ─── RECHERCHE EMAIL VIA GOOGLE ────────────────────────────────────────────────
