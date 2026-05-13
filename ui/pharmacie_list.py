@@ -31,6 +31,7 @@ class WorkerEnrichissement(QThread):
         self.db_path = db_path
         self.api_token = api_token
         self._arreter = False
+        self._stop_flag = [False]
 
     def run(self):
         from enricher import enrichir_lot
@@ -38,7 +39,7 @@ class WorkerEnrichissement(QThread):
             self.db_path,
             api_token=self.api_token,
             callback_progress=self._callback,
-            stop_flag=[False],
+            stop_flag=self._stop_flag,
         )
         self.termine.emit(result)
 
@@ -48,6 +49,7 @@ class WorkerEnrichissement(QThread):
 
     def arreter(self):
         self._arreter = True
+        self._stop_flag[0] = True
 
 
 class ListePharmacies(QWidget):
@@ -252,9 +254,9 @@ class ListePharmacies(QWidget):
 
             # Couleur de ligne
             couleur = None
-            if statut == "Borne posee":
+            if statut == "Borne posée":
                 couleur = COULEUR_BORNE_POSEE
-            elif statut == "Pas interesse":
+            elif statut == "Pas intéressé":
                 couleur = COULEUR_PAS_INTERESSE
             elif en_cible:
                 couleur = COULEUR_EN_CIBLE
@@ -348,7 +350,7 @@ class ListePharmacies(QWidget):
             if chemin.endswith(".csv"):
                 _exporter_csv(pharmacies, chemin)
             else:
-                _exporter_excel(pharmacies, chemin)
+                exporter_excel(pharmacies, chemin)
             QMessageBox.information(self, "Export reussi", f"Fichier enregistre :\n{chemin}")
         except Exception as e:
             QMessageBox.critical(self, "Erreur d'export", str(e))
@@ -361,7 +363,7 @@ class ListePharmacies(QWidget):
         self.api_token = token
 
 
-def _exporter_excel(pharmacies, chemin: str):
+def exporter_excel(pharmacies, chemin: str):
     import openpyxl
     wb = openpyxl.Workbook()
     ws = wb.active

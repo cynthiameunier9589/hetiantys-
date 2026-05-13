@@ -24,6 +24,7 @@ class WorkerScraping(QThread):
         self.db_path = db_path
         self.departement = departement
         self._arreter = False
+        self._stop_flag = [False]
 
     def run(self):
         def callback(msg: str):
@@ -34,12 +35,13 @@ class WorkerScraping(QThread):
             self.db_path,
             self.departement,
             callback=callback,
-            stop_flag=[False],
+            stop_flag=self._stop_flag,
         )
         self.termine.emit(result)
 
     def arreter(self):
         self._arreter = True
+        self._stop_flag[0] = True
 
 
 class ScrapingDialog(QDialog):

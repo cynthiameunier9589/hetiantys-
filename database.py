@@ -130,7 +130,7 @@ def mettre_a_jour_pharmacie(db_path: str, pharmacie_id: int, data: Dict[str, Any
     data["date_modification"] = datetime.now().isoformat()
     data["id"] = pharmacie_id
 
-    champs = [k for k in data if k not in ("id",)]
+    champs = [k for k in data if k != "id"]
     set_clause = ", ".join(f"{c} = :{c}" for c in champs)
 
     with get_connection(db_path) as conn:

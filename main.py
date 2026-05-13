@@ -8,7 +8,7 @@ import json
 import os
 import logging
 
-from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QProgressDialog
 from PyQt6.QtCore import Qt
 
 logging.basicConfig(
@@ -136,7 +136,7 @@ def main():
     if est_premier_lancement(config):
         from ui.setup_wizard import SetupWizard
         wizard = SetupWizard(CONFIG_PATH)
-        if wizard.exec() != wizard.DialogCode.Accepted:
+        if wizard.exec() != QDialog.DialogCode.Accepted:
             sys.exit(0)
         config = charger_config()
 

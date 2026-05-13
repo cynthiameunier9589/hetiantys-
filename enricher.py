@@ -12,7 +12,7 @@ from typing import Optional, Callable, Dict, Any, List
 import requests
 from bs4 import BeautifulSoup
 
-from database import mettre_a_jour_pharmacie, lister_pharmacies, get_connection
+from database import mettre_a_jour_pharmacie, lister_pharmacies
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ def enrichir_pharmacie(
         if infos_pappers.get("nom_decidant"):
             mise_a_jour.update(infos_pappers)
             log(f"  ✓ Dirigeant trouvé : {infos_pappers.get('prenom_decidant', '')} {infos_pappers['nom_decidant']}")
-        time.sleep(1)
+        time.sleep(random.uniform(0.8, 1.5))
 
     # Étape 2 — Email Google
     if not pharmacie.get("email"):
@@ -198,16 +198,16 @@ def enrichir_pharmacie(
         if email:
             mise_a_jour["email"] = email
             log(f"  ✓ Email trouvé : {email}")
-        time.sleep(3)
+        time.sleep(random.uniform(2.5, 4.0))
 
     # Étape 3 — Pages Jaunes fiche détaillée
-    if not mise_a_jour.get("email") and not pharmacie.get("email"):
+    if not mise_a_jour.get("email"):
         log(f"  → Pages Jaunes fiche détaillée...")
         email_pj = enrichir_pages_jaunes_detail(nom, ville)
         if email_pj:
             mise_a_jour["email"] = email_pj
             log(f"  ✓ Email PJ trouvé : {email_pj}")
-        time.sleep(2)
+        time.sleep(random.uniform(1.5, 2.5))
 
     # Enregistrement si au moins une info trouvée
     if mise_a_jour:

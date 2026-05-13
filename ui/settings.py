@@ -241,8 +241,8 @@ class PageParametres(QWidget):
         chemin_db = self.input_chemin_db.text().strip() or self.config.get("chemin_db", "")
         try:
             pharmacies = database.lister_pharmacies(chemin_db)
-            from ui.pharmacie_list import _exporter_excel
-            _exporter_excel(pharmacies, chemin)
+            from ui.pharmacie_list import exporter_excel
+            exporter_excel(pharmacies, chemin)
             QMessageBox.information(
                 self, "Export réussi",
                 f"{len(pharmacies)} pharmacies exportées vers :\n{chemin}"

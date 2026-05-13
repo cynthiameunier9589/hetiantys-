@@ -71,6 +71,7 @@ def importer_excel(
     total = len(rows)
 
     compteurs = {"inserees": 0, "doublons": 0, "erreurs": 0}
+    nom = ""  # Initialisé pour le callback de progression
 
     for i, row in enumerate(rows):
         try:

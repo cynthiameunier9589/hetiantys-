@@ -354,7 +354,7 @@ class FichePharmacieDetail(QWidget):
         self.champ_email_dec.set_valeur(pharm.get("email_decidant"))
 
         self._blocage_statut = True
-        statut = pharm.get("statut", "A contacter")
+        statut = pharm.get("statut") or STATUTS_DISPONIBLES[0]
         idx = self.combo_statut.findText(statut)
         if idx >= 0:
             self.combo_statut.setCurrentIndex(idx)

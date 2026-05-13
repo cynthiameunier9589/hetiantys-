@@ -41,7 +41,7 @@ REGIONS_DEPARTEMENTS = {
     "Nouvelle-Aquitaine":       ["16", "17", "19", "23", "24", "33", "40", "47", "64", "79", "86", "87"],
     "Occitanie":                ["09", "11", "12", "30", "31", "32", "34", "46", "48", "65", "66", "81", "82"],
     "Pays de la Loire":         ["44", "49", "53", "72", "85"],
-    "Provence-Alpes-Cote d'Azur": ["04", "05", "06", "13", "83", "84"],
+    "Provence-Alpes-Côte d'Azur": ["04", "05", "06", "13", "83", "84"],
     "DOM-TOM":                  ["971", "972", "973", "974", "976"],
 }
 
@@ -111,8 +111,19 @@ def _nettoyer_tel(tel: str) -> str:
 # SOURCE 1 : API Annuaire Santé FHIR (officielle, complète)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _prefixe_cp(departement: str) -> str:
+    """Retourne le préfixe de code postal pour un département (gère 2A, 2B, DOM)."""
+    dept = departement.upper().strip()
+    if dept in ("2A", "2B"):
+        return dept
+    try:
+        return str(int(dept)).zfill(2)
+    except ValueError:
+        return dept
+
+
 def _fhir_url_departement(departement: str, offset: int = 0) -> str:
-    prefixe = departement.zfill(2)
+    prefixe = _prefixe_cp(departement)
     return (
         "https://api.annuaire.sante.fr/fhir/v1/Organization"
         f"?type=SA25"
@@ -236,7 +247,7 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
     Scrape les pharmacies via OpenStreetMap (Overpass API).
     Fiable, rapide, couvre ~70% des officines françaises.
     """
-    prefixe = departement.zfill(2)
+    prefixe = _prefixe_cp(departement)
 
     query = (
         f'[out:json][timeout:60];'
@@ -270,8 +281,8 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
             if not nom:
                 continue
 
-            cp = tags.get("addr:postcode", "")
-            if not cp.startswith(prefixe):
+            cp = tags.get("addr:postcode") or ""
+            if not cp or not cp.startswith(prefixe):
                 continue
 
             ville = _nettoyer_nom(
