@@ -15,7 +15,12 @@ import random
 from typing import Callable, Optional, List, Dict, Any
 
 import requests
+import urllib3
 from bs4 import BeautifulSoup
+
+# Sur Mac avec Python 3.9 (LibreSSL), les certificats SSL peuvent bloquer.
+# On désactive la vérification SSL pour les APIs publiques non sensibles.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from database import inserer_pharmacie, pharmacie_existe
 
@@ -51,10 +56,13 @@ REGIONS_DEPARTEMENTS = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _get(url: str, headers: dict, timeout: int = 30, params: dict = None) -> Optional[requests.Response]:
-    """GET robuste avec retry sur 429/503 et timeout."""
+    """GET robuste avec retry sur 429/503, timeout et SSL désactivé pour Mac/LibreSSL."""
     for tentative in range(4):
         try:
-            resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+            resp = requests.get(
+                url, headers=headers, params=params,
+                timeout=timeout, verify=False
+            )
             if resp.status_code in (429, 503):
                 attente = 5 * (tentative + 1)
                 logger.warning(f"HTTP {resp.status_code} — attente {attente}s")
@@ -67,8 +75,11 @@ def _get(url: str, headers: dict, timeout: int = 30, params: dict = None) -> Opt
         except requests.exceptions.Timeout:
             logger.warning(f"Timeout {url} (tentative {tentative + 1})")
             time.sleep(2 * (tentative + 1))
-        except requests.exceptions.ConnectionError:
-            logger.warning(f"Connexion impossible {url}")
+        except requests.exceptions.ConnectionError as e:
+            logger.warning(f"Connexion impossible {url} : {e}")
+            if tentative < 3:
+                time.sleep(2 * (tentative + 1))
+                continue
             return None
         except Exception as e:
             logger.error(f"Erreur {url} : {e}")
@@ -77,19 +88,30 @@ def _get(url: str, headers: dict, timeout: int = 30, params: dict = None) -> Opt
 
 
 def _post(url: str, data: dict, timeout: int = 60) -> Optional[requests.Response]:
-    """POST robuste (utilisé pour Overpass)."""
-    try:
-        resp = requests.post(
-            url, data=data,
-            headers={"User-Agent": random.choice(USER_AGENTS)},
-            timeout=timeout
-        )
-        if resp.status_code == 200:
-            return resp
-        return None
-    except Exception as e:
-        logger.error(f"Erreur POST {url} : {e}")
-        return None
+    """POST robuste avec SSL désactivé pour Mac/LibreSSL."""
+    for tentative in range(3):
+        try:
+            resp = requests.post(
+                url, data=data,
+                headers={"User-Agent": random.choice(USER_AGENTS)},
+                timeout=timeout, verify=False
+            )
+            if resp.status_code == 200:
+                return resp
+            return None
+        except requests.exceptions.Timeout:
+            logger.warning(f"Timeout POST {url} (tentative {tentative + 1})")
+            time.sleep(3 * (tentative + 1))
+        except requests.exceptions.ConnectionError as e:
+            logger.warning(f"Connexion POST impossible {url} : {e}")
+            if tentative < 2:
+                time.sleep(3 * (tentative + 1))
+                continue
+            return None
+        except Exception as e:
+            logger.error(f"Erreur POST {url} : {e}")
+            return None
+    return None
 
 
 def _nettoyer_nom(nom: str) -> str:

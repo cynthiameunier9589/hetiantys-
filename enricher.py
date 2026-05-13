@@ -10,7 +10,10 @@ import re
 from typing import Optional, Callable, Dict, Any, List
 
 import requests
+import urllib3
 from bs4 import BeautifulSoup
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from database import mettre_a_jour_pharmacie, lister_pharmacies
 
@@ -44,17 +47,20 @@ def _headers() -> Dict[str, str]:
 
 
 def _get(url: str, timeout: int = 15) -> Optional[requests.Response]:
-    """Requête GET avec gestion des erreurs réseau."""
-    try:
-        resp = requests.get(url, headers=_headers(), timeout=timeout)
-        if resp.status_code == 429:
-            time.sleep(10)
-            resp = requests.get(url, headers=_headers(), timeout=timeout)
-        resp.raise_for_status()
-        return resp
-    except requests.exceptions.RequestException as e:
-        logger.warning(f"Erreur réseau {url} : {e}")
-        return None
+    """Requête GET avec gestion des erreurs réseau et SSL désactivé pour Mac/LibreSSL."""
+    for tentative in range(3):
+        try:
+            resp = requests.get(url, headers=_headers(), timeout=timeout, verify=False)
+            if resp.status_code == 429:
+                time.sleep(10)
+                continue
+            resp.raise_for_status()
+            return resp
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Erreur réseau {url} (tentative {tentative+1}) : {e}")
+            if tentative < 2:
+                time.sleep(2 * (tentative + 1))
+    return None
 
 
 def _extraire_emails(texte: str) -> List[str]:
