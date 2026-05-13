@@ -24,7 +24,9 @@ QFrame#sidebar {
 }
 """
 
-STYLE_BTN_NAV = """
+STYLE_BTN_NAV = ""
+
+STYLE_BTN_NAV_INACTIF = """
 QPushButton {
     color: rgba(255,255,255,0.75);
     background: transparent;
@@ -32,15 +34,18 @@ QPushButton {
     text-align: left;
     padding: 12px 16px;
     font-size: 13px;
-    border-radius: 0;
 }
-QPushButton:hover {
-    background: rgba(255,255,255,0.1);
+"""
+
+STYLE_BTN_NAV_ACTIF = """
+QPushButton {
     color: white;
-}
-QPushButton[actif="true"] {
     background: rgba(255,255,255,0.15);
-    color: white;
+    border: none;
+    border-left: 3px solid #64B5F6;
+    text-align: left;
+    padding: 12px 16px;
+    font-size: 13px;
     font-weight: bold;
     border-left: 3px solid #64B5F6;
 }
@@ -59,7 +64,6 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1280, 800)
 
         self._construire_ui()
-        self._actualiser_tableau_de_bord()
 
     def _construire_ui(self):
         widget_central = QWidget()
@@ -117,10 +121,9 @@ class MainWindow(QMainWindow):
 
         for cle, label in nav_items:
             btn = QPushButton(label)
-            btn.setStyleSheet(STYLE_NAV := STYLE_BTN_NAV)
+            btn.setStyleSheet(STYLE_BTN_NAV_INACTIF)
             btn.setMinimumHeight(46)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            btn.setProperty("actif", False)
             btn.clicked.connect(lambda checked, c=cle: self._naviguer(c))
             self._btns_nav[cle] = btn
             sidebar_layout.addWidget(btn)
@@ -178,9 +181,10 @@ class MainWindow(QMainWindow):
         # Mise à jour visuelle des boutons
         for k, btn in self._btns_nav.items():
             actif = k == cle or (cle == "fiche" and k == "pharmacies")
-            btn.setProperty("actif", str(actif).lower())
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+            if actif:
+                btn.setStyleSheet(STYLE_BTN_NAV_ACTIF)
+            else:
+                btn.setStyleSheet(STYLE_BTN_NAV_INACTIF)
 
         # Actualisation selon la page
         if cle == "dashboard":
