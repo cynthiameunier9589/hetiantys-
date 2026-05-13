@@ -7,6 +7,7 @@ Sources :
 """
 
 import logging
+import re
 import time
 import random
 import urllib.parse
@@ -111,8 +112,28 @@ def _get(url: str, headers: dict = None, timeout: int = 25) -> Optional[requests
 
 
 def _dans_france(lat: float, lon: float) -> bool:
-    """Vérifie que les coordonnées sont en France (métropole + DOM)."""
-    return 41.0 <= lat <= 52.0 and -6.0 <= lon <= 10.0
+    """Vérifie que les coordonnées sont en France métropole ou DOM-TOM."""
+    if lat == 0 and lon == 0:
+        return False
+    # Métropole
+    if 41.0 <= lat <= 52.0 and -6.0 <= lon <= 10.0:
+        return True
+    # Guadeloupe (971)
+    if 15.8 <= lat <= 16.6 and -61.9 <= lon <= -60.9:
+        return True
+    # Martinique (972)
+    if 14.3 <= lat <= 15.0 and -61.3 <= lon <= -60.7:
+        return True
+    # Guyane (973)
+    if 2.0 <= lat <= 5.8 and -54.6 <= lon <= -51.5:
+        return True
+    # La Réunion (974)
+    if -21.5 <= lat <= -20.8 and 55.2 <= lon <= 55.9:
+        return True
+    # Mayotte (976)
+    if -13.1 <= lat <= -12.6 and 45.0 <= lon <= 45.4:
+        return True
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,7 +178,7 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
     query_enc = urllib.parse.quote(query)
 
     if callback:
-        callback(f"  [OpenStreetMap] Dept {departement} (chemist + cosmetics)...")
+        callback(f"  [OpenStreetMap] Dept {departement} (shop=chemist)...")
 
     resp = None
     for mirror in OVERPASS_MIRRORS:
@@ -301,7 +322,6 @@ def _scraper_pj_url(url: str, departement: str, code_postal_prefixe: str) -> Lis
 
             # Fallback : extraire CP depuis texte adresse
             if not cp and adresse:
-                import re
                 m = re.search(r'\b(\d{5})\b', adresse)
                 if m:
                     cp = m.group(1)
@@ -370,21 +390,19 @@ def _fusionner(base: Dict, complement: Dict) -> Dict:
 
 def _dedoublonner(items: List[Dict]) -> List[Dict]:
     index: Dict[tuple, Dict] = {}
-    sans_cp = []
     for p in items:
         nom_norm = p.get("nom", "").lower().strip()
-        cp = str(p.get("code_postal") or "").strip()
         if not nom_norm:
             continue
-        if not cp:
-            sans_cp.append(p)
-            continue
-        cle = (nom_norm, cp)
+        cp = str(p.get("code_postal") or "").strip()
+        ville_norm = (p.get("ville") or "").lower().strip()
+        # Clé par (nom, CP) si CP dispo, sinon par (nom, ville)
+        cle = (nom_norm, cp) if cp else (nom_norm, ville_norm)
         if cle in index:
             index[cle] = _fusionner(index[cle], p)
         else:
             index[cle] = p
-    return list(index.values()) + sans_cp
+    return list(index.values())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
