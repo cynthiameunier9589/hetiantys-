@@ -6,6 +6,7 @@ Sources :
   2. Pages Jaunes — recherche par département, termes multiples, pagination
 """
 
+import json
 import logging
 import re
 import time
@@ -158,10 +159,35 @@ def _get_nom_departement(departement: str) -> str:
 # SOURCE 1 : Overpass / OpenStreetMap
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _overpass_post(query: str, timeout: int = 110) -> Optional[requests.Response]:
+    """Envoie la requête Overpass en POST sur tous les miroirs."""
+    headers = {"User-Agent": _ua(), "Content-Type": "application/x-www-form-urlencoded"}
+    for mirror in OVERPASS_MIRRORS:
+        for tentative in range(2):
+            try:
+                resp = requests.post(
+                    mirror,
+                    data={"data": query},
+                    headers=headers,
+                    timeout=timeout,
+                    verify=False,
+                )
+                if resp.status_code == 200:
+                    return resp
+                if resp.status_code == 429:
+                    time.sleep(10)
+            except requests.exceptions.Timeout:
+                time.sleep(3)
+            except Exception:
+                break
+        time.sleep(2)
+    return None
+
+
 def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
     """
-    Récupère les parapharmacies via OpenStreetMap.
-    Tags : shop=chemist (parapharmacies indépendantes) + shop=cosmetics (grandes enseignes).
+    Récupère les parapharmacies via OpenStreetMap (shop=chemist).
+    Utilise POST (méthode officielle Overpass, plus fiable que GET).
     Filtrage GPS pour rester en France.
     """
     prefixe = _prefixe_cp(departement)
@@ -175,27 +201,19 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
         f');'
         f'out center;'
     )
-    query_enc = urllib.parse.quote(query)
 
     if callback:
-        callback(f"  [OpenStreetMap] Dept {departement} (shop=chemist)...")
+        callback(f"  [OpenStreetMap] Dept {departement} — envoi POST...")
 
-    resp = None
-    for mirror in OVERPASS_MIRRORS:
-        url = f"{mirror}?data={query_enc}"
-        if callback:
-            callback(f"  [OpenStreetMap] Miroir {mirror.split('/')[2]}...")
-        resp = _get(url, timeout=100)
-        if resp is not None:
-            if callback:
-                callback(f"  [OpenStreetMap] OK : {mirror.split('/')[2]}")
-            break
-        time.sleep(2)
+    resp = _overpass_post(query)
 
     if resp is None:
         if callback:
             callback("  [OpenStreetMap] Tous les miroirs indisponibles.")
         return []
+
+    if callback:
+        callback("  [OpenStreetMap] Réponse reçue, analyse...")
 
     resultats = []
     try:
@@ -258,28 +276,36 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _scraper_pj_url(url: str, departement: str, code_postal_prefixe: str) -> List[Dict[str, Any]]:
-    """Parse une page de résultats Pages Jaunes et retourne les fiches."""
+    """
+    Parse une page de résultats Pages Jaunes.
+    Essaie d'abord les sélecteurs HTML, puis les données JSON embarquées.
+    """
     headers = {
         "User-Agent": _ua(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "fr-FR,fr;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
         "Referer": "https://www.pagesjaunes.fr/",
+        "DNT": "1",
     }
-    resp = _get(url, headers=headers, timeout=25)
+    resp = _get(url, headers=headers, timeout=30)
     if not resp:
         return []
 
     resultats = []
-    try:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        fiches = (
-            soup.select("article.bi-generic")
-            or soup.select("li.bi-item")
-            or soup.select("[data-bi-id]")
-            or soup.select(".bi-content")
-        )
+    soup = BeautifulSoup(resp.text, "html.parser")
 
-        for fiche in fiches:
+    # ── Méthode 1 : sélecteurs HTML classiques ─────────────────────────────
+    fiches = (
+        soup.select("article.bi-generic")
+        or soup.select("li.bi-item")
+        or soup.select("[data-bi-id]")
+        or soup.select(".bi-content")
+    )
+
+    for fiche in fiches:
+        try:
             nom_el = (
                 fiche.select_one(".bi-denomination")
                 or fiche.select_one("h3")
@@ -292,7 +318,6 @@ def _scraper_pj_url(url: str, departement: str, code_postal_prefixe: str) -> Lis
             if not nom:
                 continue
 
-            # Téléphone
             tel_el = fiche.select_one("[data-phone]")
             telephone = _nettoyer_tel(tel_el.get("data-phone", "") if tel_el else "")
             if not telephone:
@@ -302,47 +327,85 @@ def _scraper_pj_url(url: str, departement: str, code_postal_prefixe: str) -> Lis
                         telephone = _nettoyer_tel(t.get_text(strip=True))
                         break
 
-            # Email
             email_el = fiche.select_one("a[href^='mailto:']")
             email = email_el.get("href", "").replace("mailto:", "").strip() if email_el else ""
 
-            # Adresse
-            adresse_el = fiche.select_one(".bi-address, .adresse, .street-address, [itemprop='streetAddress']")
+            adresse_el = fiche.select_one(
+                ".bi-address, .adresse, .street-address, [itemprop='streetAddress']"
+            )
             adresse = adresse_el.get_text(strip=True) if adresse_el else None
 
-            # Code postal + ville depuis l'adresse ou le markup
-            cp = ""
-            ville = ""
-            cp_el = fiche.select_one("[itemprop='postalCode']")
+            cp = (fiche.select_one("[itemprop='postalCode']") or None)
+            cp = cp.get_text(strip=True) if cp else ""
             ville_el = fiche.select_one("[itemprop='addressLocality']")
-            if cp_el:
-                cp = cp_el.get_text(strip=True)
-            if ville_el:
-                ville = ville_el.get_text(strip=True).title()
+            ville = ville_el.get_text(strip=True).title() if ville_el else ""
 
-            # Fallback : extraire CP depuis texte adresse
             if not cp and adresse:
                 m = re.search(r'\b(\d{5})\b', adresse)
                 if m:
                     cp = m.group(1)
 
-            # Garder seulement si CP correspond au département
             if cp and not cp.startswith(code_postal_prefixe):
                 continue
 
             resultats.append({
-                "nom": nom,
-                "adresse": adresse,
-                "ville": ville or None,
-                "code_postal": cp or None,
+                "nom": nom, "adresse": adresse,
+                "ville": ville or None, "code_postal": cp or None,
                 "departement": departement,
-                "telephone": telephone or None,
-                "email": email or None,
+                "telephone": telephone or None, "email": email or None,
                 "source": "scraping_pagesjaunes",
             })
+        except Exception:
+            continue
 
+    if resultats:
+        return resultats
+
+    # ── Méthode 2 : JSON-LD embarqué dans <script type="application/ld+json"> ──
+    try:
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                data = json.loads(script.string or "")
+            except Exception:
+                continue
+
+            items = []
+            if isinstance(data, dict):
+                if data.get("@type") == "ItemList":
+                    items = data.get("itemListElement", [])
+                elif data.get("@type") in ("LocalBusiness", "Store", "Pharmacy"):
+                    items = [{"item": data}]
+            elif isinstance(data, list):
+                items = [{"item": d} for d in data]
+
+            for entry in items:
+                biz = entry.get("item", entry)
+                if not isinstance(biz, dict):
+                    continue
+                nom = _nettoyer_nom(biz.get("name", ""))
+                if not nom:
+                    continue
+
+                addr = biz.get("address", {})
+                cp = addr.get("postalCode", "") if isinstance(addr, dict) else ""
+                ville = addr.get("addressLocality", "").title() if isinstance(addr, dict) else ""
+                adresse = addr.get("streetAddress", "") if isinstance(addr, dict) else ""
+
+                if cp and not cp.startswith(code_postal_prefixe):
+                    continue
+
+                telephone = _nettoyer_tel(biz.get("telephone", ""))
+                email = biz.get("email", "")
+
+                resultats.append({
+                    "nom": nom, "adresse": adresse or None,
+                    "ville": ville or None, "code_postal": cp or None,
+                    "departement": departement,
+                    "telephone": telephone or None, "email": email or None,
+                    "source": "scraping_pagesjaunes",
+                })
     except Exception as e:
-        logger.error(f"Erreur parsing PJ : {e}")
+        logger.error(f"Erreur JSON-LD PJ : {e}")
 
     return resultats
 
