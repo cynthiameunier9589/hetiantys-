@@ -159,10 +159,10 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
     """
     prefixe = _prefixe_cp(departement)
 
-    # bbox France métropolitaine + DOM : lat 41.3–51.1, lon -5.2–9.6
-    # Indispensable pour que "^42" ne matche pas des codes postaux chinois/russes
+    # Sans bbox dans la requête (cause des rejets sur certains miroirs).
+    # Le filtrage géographique France se fait après, sur les coordonnées des éléments.
     query = (
-        f'[out:json][timeout:90][bbox:41.3,-5.2,51.1,9.6];'
+        f'[out:json][timeout:90];'
         f'('
         f'node[shop=chemist]["addr:postcode"~"^{prefixe}"];'
         f'way[shop=chemist]["addr:postcode"~"^{prefixe}"];'
@@ -202,6 +202,17 @@ def scraper_overpass(departement: str, callback=None) -> List[Dict[str, Any]]:
             callback(f"  [OpenStreetMap] {len(elements)} elements trouves")
 
         for el in elements:
+            # Filtrage géographique : France métropolitaine + DOM uniquement
+            if el.get("type") == "node":
+                lat = el.get("lat", 0)
+                lon = el.get("lon", 0)
+            else:
+                center = el.get("center", {})
+                lat = center.get("lat", 0)
+                lon = center.get("lon", 0)
+            if not (41.0 <= lat <= 52.0 and -6.0 <= lon <= 10.0):
+                continue
+
             tags = el.get("tags", {})
             nom = _nettoyer_nom(tags.get("name") or tags.get("operator") or "")
             if not nom:
