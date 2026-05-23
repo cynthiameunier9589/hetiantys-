@@ -13,6 +13,7 @@ from typing import List, Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import quote as url_quote
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -146,7 +147,7 @@ def recuperer_ca_par_nom(
     try:
         _pause_aleatoire()
         terme = f"{nom} {code_postal}".strip()
-        url = f"https://www.pappers.fr/recherche?q={requests.utils.quote(terme)}"
+        url = f"https://www.pappers.fr/recherche?q={url_quote(terme)}"
 
         reponse = session.get(url, timeout=TIMEOUT_HTTP, allow_redirects=True)
         if reponse.status_code in (429, 503):
@@ -156,7 +157,7 @@ def recuperer_ca_par_nom(
         soup = BeautifulSoup(reponse.text, "lxml")
         lien = soup.find("a", href=re.compile(r"/entreprise/"))
 
-        if not lien:
+        if not lien or not lien.get("href"):
             return "", ""
 
         _pause_aleatoire()
@@ -223,17 +224,17 @@ def enrichir(
                 p.source_ca = "Non disponible"
                 logger.info(f"Pappers : CA non trouvé pour '{p.nom}'")
 
-                if echecs_consecutifs >= SEUIL_PAUSE:
-                    print(f"\n  [PAPPERS] Pause anti-blocage 60s...")
-                    logger.warning("Pause anti-blocage Pappers activée")
-                    time.sleep(60)
-                    echecs_consecutifs = 0
-
+                # Vérifier l'abandon AVANT la pause (elif évite le reset à 0 qui bloque l'abandon)
                 if echecs_consecutifs >= SEUIL_ABANDON:
                     print(f"\n  [PAPPERS] Trop d'échecs consécutifs, Pappers abandonné")
                     logger.error("Pappers abandonné après trop d'échecs")
                     p.source_ca = "Pappers indisponible"
                     abandon = True
+                elif echecs_consecutifs >= SEUIL_PAUSE:
+                    print(f"\n  [PAPPERS] Pause anti-blocage 60s...")
+                    logger.warning("Pause anti-blocage Pappers activée")
+                    time.sleep(60)
+                    echecs_consecutifs = 0
 
         except Exception as e:
             logger.error(f"Erreur inattendue Pappers '{p.nom}' : {e}")

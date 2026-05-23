@@ -84,7 +84,8 @@ def extraire_dirigeant(resultats_bruts: list) -> str:
         if dirigeants:
             d = dirigeants[0]
             if d.get("type_dirigeant") == "personne physique":
-                prenom = d.get("prenoms", "").split()[0] if d.get("prenoms") else ""
+                prenoms_str = (d.get("prenoms") or "").strip()
+                prenom = prenoms_str.split()[0] if prenoms_str else ""
                 nom = d.get("nom", "")
                 return f"{prenom} {nom}".strip()
             else:
@@ -129,7 +130,8 @@ def enrichir_depuis_resultat(p: Parapharmacie, res: dict, score: int, nom_legal:
     if dirigeants:
         d = dirigeants[0]
         if d.get("type_dirigeant") == "personne physique":
-            prenom = d.get("prenoms", "").split()[0] if d.get("prenoms") else ""
+            prenoms_str = (d.get("prenoms") or "").strip()
+            prenom = prenoms_str.split()[0] if prenoms_str else ""
             p.dirigeant = f"{prenom} {d.get('nom', '')}".strip()
         else:
             p.dirigeant = d.get("denomination", "")

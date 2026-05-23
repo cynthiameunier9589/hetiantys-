@@ -3,7 +3,7 @@ Structure de données commune à tous les modules de prospection.
 Aucun module n'invente sa propre structure — tous importent depuis ici.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 

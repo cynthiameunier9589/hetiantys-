@@ -216,6 +216,10 @@ def parser_elements(donnees: dict) -> List[Parapharmacie]:
             lat = str(elem["center"].get("lat", ""))
             lon = str(elem["center"].get("lon", ""))
 
+        # Ignorer les éléments sans coordonnées valides
+        if not lat or not lon or lat == "None" or lon == "None":
+            continue
+
         p = Parapharmacie(
             nom=tags.get("name", ""),
             adresse=(
@@ -286,17 +290,22 @@ def rechercher(zone: str, force_refresh: bool = False) -> List[Parapharmacie]:
     """
     # Vérification du cache (fichiers des 7 derniers jours)
     if not force_refresh:
-        for i in range(CACHE_DUREE_JOURS):
-            date_test = (datetime.now() - timedelta(days=i)).strftime('%Y%m%d')
-            chemin_test = os.path.join(
-                BASE_DIR, "cache",
-                f"osm_{normaliser_nom_fichier(zone)}_{date_test}.json"
-            )
-            donnees_cache = charger_cache(chemin_test)
-            if donnees_cache is not None:
-                print(f"  [CACHE] Données OSM chargées depuis le {date_test}")
-                logger.info(f"Cache OSM utilisé : {chemin_test}")
-                return [Parapharmacie(**d) for d in donnees_cache]
+        # Chercher le cache le plus récent via glob (O(1) au lieu de O(7))
+        pattern = os.path.join(BASE_DIR, "cache", f"osm_{normaliser_nom_fichier(zone)}_*.json")
+        fichiers_cache = sorted(
+            (f for f in __import__('glob').glob(pattern) if not f.endswith('.corrompu')),
+            key=os.path.getmtime,
+            reverse=True
+        )
+        if fichiers_cache:
+            age_jours = (datetime.now().timestamp() - os.path.getmtime(fichiers_cache[0])) / 86400
+            if age_jours <= CACHE_DUREE_JOURS:
+                donnees_cache = charger_cache(fichiers_cache[0])
+                if donnees_cache is not None:
+                    date_str = os.path.basename(fichiers_cache[0]).split('_')[-1].replace('.json', '')
+                    print(f"  [CACHE] Données OSM chargées depuis le {date_str}")
+                    logger.info(f"Cache OSM utilisé : {fichiers_cache[0]}")
+                    return [Parapharmacie(**d) for d in donnees_cache]
 
     # Géolocalisation
     print(f"  → Géolocalisation de '{zone}'...")
@@ -344,6 +353,7 @@ def rechercher(zone: str, force_refresh: bool = False) -> List[Parapharmacie]:
                 donnees_brutes2 = requete_overpass(requete2)
                 if donnees_brutes2:
                     parapharmacies = parser_elements(donnees_brutes2)
+                    parapharmacies = dedupliquer(parapharmacies)
                     print(f"  → {len(parapharmacies)} entrées après élargissement au département")
 
     if len(parapharmacies) == 0:

@@ -6,7 +6,6 @@ Lance les 4 phases : OSM → INSEE → Pappers → Email Finder, puis exporte en
 import sys
 import os
 import glob
-import json
 from datetime import datetime
 
 # Vérification Python avant tout import
@@ -137,7 +136,7 @@ def executer_pipeline(zone: str, force_refresh: bool = False) -> None:
 
         # Phase 4 : Email finder
         print(f"\n  [4/4] Recherche des emails...")
-        donnees = email_finder.enrichir(donnees)
+        donnees = email_finder.enrichir(donnees, zone)
         avec_email = sum(1 for p in donnees if p.email)
         print(f"  [OK] {avec_email}/{len(donnees)} emails trouvés")
 

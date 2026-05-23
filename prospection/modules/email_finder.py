@@ -151,11 +151,13 @@ def trouver_email(site_web: str) -> str:
     return ""
 
 
-def enrichir(parapharmacies: List[Parapharmacie]) -> List[Parapharmacie]:
+def enrichir(parapharmacies: List[Parapharmacie], zone: str = "") -> List[Parapharmacie]:
     """
     Enrichit les Parapharmacies avec des emails trouvés sur leurs sites web.
     Les téléphones sont déjà normalisés depuis la Phase 1 (OSM).
     """
+    from config import sauvegarder_progression
+
     total = len(parapharmacies)
     enrichis = 0
 
@@ -179,9 +181,15 @@ def enrichir(parapharmacies: List[Parapharmacie]) -> List[Parapharmacie]:
             enrichis += 1
             logger.info(f"Email finder : '{p.nom}' → {email_trouve}")
 
+        # Sauvegarde progressive toutes les 10 entrées
+        if (i + 1) % 10 == 0 and zone:
+            sauvegarder_progression(parapharmacies, zone, 4)
+
     print()  # Saut de ligne après la progression
 
     logger.info(f"Email finder terminé : {enrichis}/{total} emails trouvés")
+    if zone:
+        sauvegarder_progression(parapharmacies, zone, 4)
     return parapharmacies
 
 
