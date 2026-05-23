@@ -31,9 +31,9 @@ de la zone + infos légales, CA et emails.
   Avec elle : + SIRET, dirigeant, statut juridique
 
   Étapes :
-    1. https://api.insee.fr  →  Créer un compte
-    2. Créer une application
-    3. Copier la Consumer Key (et Consumer Secret)
+    1. https://portail-api.insee.fr/  →  Créer un compte
+    2. Créer une application, souscrire à l'API "Sirene"
+    3. Copier la Consumer Key ET la Consumer Secret
     4. Coller dans config.py :
        INSEE_API_KEY = "consumer_key:consumer_secret"
 

@@ -25,18 +25,20 @@ from modules.modeles import Parapharmacie
 
 logger = creer_logger("insee")
 
-URL_TOKEN = "https://api.insee.fr/token"
+# Nouveau portail INSEE (l'ancienne URL api.insee.fr est dépréciée)
+URL_TOKEN = "https://portail-api.insee.fr/token"
 URL_SIRET = "https://api.insee.fr/entreprises/sirene/V3.11/siret"
 
 INSTRUCTIONS_CLE = """
-┌─────────────────────────────────────────────┐
-│ ACTIVATION INSEE (gratuit)                  │
-│ 1. Aller sur https://api.insee.fr           │
-│ 2. Créer un compte                          │
-│ 3. Créer une application                    │
-│ 4. Copier la clé Consumer Key               │
-│ 5. La coller dans config.py : INSEE_API_KEY │
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│ ACTIVATION INSEE (gratuit)                           │
+│ 1. Aller sur https://portail-api.insee.fr/           │
+│ 2. Créer un compte                                   │
+│ 3. Créer une application → souscrire à "Sirene"      │
+│ 4. Copier Consumer Key ET Consumer Secret            │
+│ 5. Coller dans config.py :                           │
+│    INSEE_API_KEY = "consumer_key:consumer_secret"    │
+└──────────────────────────────────────────────────────┘
 """
 
 
