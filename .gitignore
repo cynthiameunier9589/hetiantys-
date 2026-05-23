@@ -12,3 +12,10 @@ build/
 *.egg-info/
 .DS_Store
 Thumbs.db
+
+# Prospection — fichiers générés
+prospection/cache/
+prospection/exports/
+prospection/logs/
+prospection/__pycache__/
+prospection/modules/__pycache__/
