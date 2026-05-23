@@ -1,6 +1,11 @@
 """
 Module INSEE — Enrichissement légal via l'API Sirene v3.11.
 Ajoute SIRET, dirigeant, statut juridique, date de création.
+
+Utilise l'API Sirene "Accès public" du nouveau portail INSEE.
+Aucune clé API requise pour l'accès public.
+Si INSEE_API_KEY est renseignée dans config.py, une authentification
+OAuth2 est tentée pour un quota plus élevé.
 """
 
 import sys
@@ -16,7 +21,7 @@ from rapidfuzz import fuzz
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import (
-    BASE_DIR, creer_logger, normaliser_nom_fichier, sauvegarder_progression,
+    BASE_DIR, creer_logger, sauvegarder_progression,
     INSEE_API_KEY, DELAI_INSEE, TIMEOUT_HTTP,
     SEUIL_MATCH_AUTO, SEUIL_MATCH_PROBABLE,
     INSEE_MAX_REQUETES_PAR_MINUTE,
@@ -25,41 +30,29 @@ from modules.modeles import Parapharmacie
 
 logger = creer_logger("insee")
 
-# Nouveau portail INSEE (l'ancienne URL api.insee.fr est dépréciée)
+# Nouvelle URL du portail INSEE (visible sur le Catalogue : api-sirene/3.11)
 URL_TOKEN = "https://portail-api.insee.fr/token"
-URL_SIRET = "https://api.insee.fr/entreprises/sirene/V3.11/siret"
-
-INSTRUCTIONS_CLE = """
-┌──────────────────────────────────────────────────────┐
-│ ACTIVATION INSEE (gratuit)                           │
-│ 1. Aller sur https://portail-api.insee.fr/           │
-│ 2. Créer un compte                                   │
-│ 3. Créer une application → souscrire à "Sirene"      │
-│ 4. Copier Consumer Key ET Consumer Secret            │
-│ 5. Coller dans config.py :                           │
-│    INSEE_API_KEY = "consumer_key:consumer_secret"    │
-└──────────────────────────────────────────────────────┘
-"""
+URL_SIRET = "https://api.insee.fr/api-sirene/3.11/siret"
+# Ancienne URL conservée en fallback
+URL_SIRET_ANCIEN = "https://api.insee.fr/entreprises/sirene/V3.11/siret"
 
 
 class GestionnaireRequetesINSEE:
-    """Gère l'authentification OAuth2 et le débit des requêtes INSEE."""
+    """Gère le débit des requêtes et l'authentification optionnelle INSEE."""
 
-    def __init__(self, api_key: str, api_secret: str = ""):
-        self.api_key = api_key
-        self.api_secret = api_secret if api_secret else api_key
+    def __init__(self):
         self.requetes_cette_minute = 0
         self.debut_minute = time.time()
         self.token: Optional[str] = None
         self.token_expiration: float = 0
+        self.url_active = URL_SIRET  # bascule sur l'ancien si le nouveau échoue
 
-    def _obtenir_nouveau_token(self) -> Optional[str]:
-        """Obtient un token OAuth2 depuis l'API INSEE."""
+    def _obtenir_token_oauth2(self, api_key: str, api_secret: str) -> Optional[str]:
+        """Tente d'obtenir un token OAuth2 (optionnel, pour quota augmenté)."""
         try:
             credentials = base64.b64encode(
-                f"{self.api_key}:{self.api_secret}".encode()
+                f"{api_key}:{api_secret}".encode()
             ).decode()
-
             reponse = requests.post(
                 URL_TOKEN,
                 data={"grant_type": "client_credentials"},
@@ -71,36 +64,37 @@ class GestionnaireRequetesINSEE:
             )
             reponse.raise_for_status()
             data = reponse.json()
-
             self.token_expiration = time.time() + data.get("expires_in", 3600) - 60
-            token = data.get("access_token")
             logger.info("Token INSEE obtenu avec succès")
-            return token
-
-        except requests.HTTPError as e:
-            logger.error(f"Erreur HTTP token INSEE : {e} — {e.response.text[:200]}")
-            print(f"  [INSEE] Erreur d'authentification : {e}")
-            return None
-        except requests.RequestException as e:
-            logger.error(f"Erreur réseau token INSEE : {e}")
-            print(f"  [INSEE] Erreur réseau lors de l'authentification : {e}")
+            return data.get("access_token")
+        except Exception as e:
+            logger.warning(f"Token INSEE optionnel non obtenu : {e}")
             return None
 
-    def renouveler_token_si_necessaire(self) -> bool:
-        """Renouvelle le token s'il a expiré."""
-        if time.time() >= self.token_expiration or self.token is None:
-            self.token = self._obtenir_nouveau_token()
-        return self.token is not None
+    def preparer(self) -> None:
+        """Initialise l'authentification si une clé est configurée."""
+        if INSEE_API_KEY:
+            if ":" in INSEE_API_KEY:
+                key, secret = INSEE_API_KEY.split(":", 1)
+            else:
+                key = secret = INSEE_API_KEY
+            self.token = self._obtenir_token_oauth2(key, secret)
+            if self.token:
+                print("  [INSEE] Authentification OAuth2 active")
+            else:
+                print("  [INSEE] Mode accès public (sans token)")
+        else:
+            print("  [INSEE] Mode accès public (sans clé API)")
 
     def attendre_si_necessaire(self) -> None:
-        """Respecte la limite de 28 requêtes/minute de l'API INSEE."""
+        """Respecte la limite de débit INSEE."""
         if time.time() - self.debut_minute > 60:
             self.requetes_cette_minute = 0
             self.debut_minute = time.time()
 
         if self.requetes_cette_minute >= INSEE_MAX_REQUETES_PAR_MINUTE:
             attente = 60 - (time.time() - self.debut_minute)
-            print(f"\n  [INSEE] Pause {attente:.0f}s (limite de débit atteinte)...")
+            print(f"\n  [INSEE] Pause {attente:.0f}s (limite de débit)...")
             time.sleep(max(attente, 0) + 1)
             self.requetes_cette_minute = 0
             self.debut_minute = time.time()
@@ -108,59 +102,69 @@ class GestionnaireRequetesINSEE:
         self.requetes_cette_minute += 1
         time.sleep(DELAI_INSEE)
 
-    def rechercher_etablissement(
-        self, nom: str, code_postal: str
-    ) -> Optional[dict]:
-        """Cherche un établissement dans la base Sirene par nom et code postal."""
-        if not self.renouveler_token_si_necessaire():
-            return None
+    def _construire_headers(self) -> dict:
+        """Construit les headers HTTP avec ou sans token."""
+        headers = {"Accept": "application/json"}
+        if self.token and time.time() < self.token_expiration:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
 
+    def rechercher_etablissement(self, nom: str, code_postal: str) -> Optional[dict]:
+        """Cherche un établissement Sirene par nom et code postal."""
         self.attendre_si_necessaire()
 
-        try:
-            # Nettoyer le nom pour la requête Lucene
-            nom_clean = nom.replace('"', ' ').replace("'", ' ').strip()
+        nom_clean = nom.replace('"', ' ').replace("'", ' ').strip()
+        params = {
+            "q": (
+                f'denominationUniteLegale:"{nom_clean}" '
+                f'AND codePostalEtablissement:"{code_postal}"'
+            ),
+            "nombre": 5,
+        }
+        headers = self._construire_headers()
 
-            params = {
-                "q": (
-                    f'denominationUniteLegale:"{nom_clean}" '
-                    f'AND codePostalEtablissement:"{code_postal}"'
-                ),
-                "nombre": 5,
-            }
+        # Essayer la nouvelle URL, puis l'ancienne en fallback
+        for url in [self.url_active, URL_SIRET_ANCIEN]:
+            try:
+                reponse = requests.get(url, params=params, headers=headers, timeout=TIMEOUT_HTTP)
 
-            reponse = requests.get(
-                URL_SIRET,
-                params=params,
-                headers={
-                    "Authorization": f"Bearer {self.token}",
-                    "Accept": "application/json",
-                },
-                timeout=TIMEOUT_HTTP,
-            )
+                if reponse.status_code == 404:
+                    return None
+                if reponse.status_code == 429:
+                    logger.warning("Limite INSEE (429), pause 60s")
+                    time.sleep(60)
+                    return None
+                if reponse.status_code in (301, 302, 410):
+                    # URL redirigée : basculer sur l'autre URL
+                    self.url_active = URL_SIRET_ANCIEN if url == URL_SIRET else URL_SIRET
+                    continue
 
-            if reponse.status_code == 404:
-                return None
-            if reponse.status_code == 401:
-                # Token expiré : forcer le renouvellement
-                self.token_expiration = 0
-                return None
-            if reponse.status_code == 429:
-                logger.warning("Limite INSEE atteinte (429), pause 60s")
-                time.sleep(60)
-                return None
+                reponse.raise_for_status()
+                data = reponse.json()
 
-            reponse.raise_for_status()
-            data = reponse.json()
-            etablissements = data.get("etablissements", [])
-            return etablissements[0] if etablissements else None
+                # Adapter selon la structure de réponse (ancienne ou nouvelle API)
+                etablissements = (
+                    data.get("etablissements") or
+                    data.get("data") or
+                    []
+                )
+                # Nouvelle API : les données peuvent être sous une clé différente
+                if not etablissements and isinstance(data, dict):
+                    for cle in data:
+                        if isinstance(data[cle], list) and data[cle]:
+                            etablissements = data[cle]
+                            break
 
-        except requests.Timeout:
-            logger.error(f"Timeout INSEE pour '{nom}'")
-            return None
-        except requests.RequestException as e:
-            logger.error(f"Erreur INSEE pour '{nom}' : {e}")
-            return None
+                return etablissements[0] if etablissements else None
+
+            except requests.Timeout:
+                logger.warning(f"Timeout INSEE ({url}) pour '{nom}'")
+                continue
+            except requests.RequestException as e:
+                logger.warning(f"Erreur INSEE ({url}) pour '{nom}' : {e}")
+                continue
+
+        return None
 
 
 def extraire_dirigeant(unite_legale: dict) -> str:
@@ -173,15 +177,12 @@ def extraire_dirigeant(unite_legale: dict) -> str:
         if prenom or nom:
             return f"{prenom} {nom}".strip()
 
-    # Fallback direct sur l'unité légale
     prenom = unite_legale.get("prenom1UniteLegale") or ""
     nom = unite_legale.get("nomUniteLegale") or ""
     return f"{prenom} {nom}".strip()
 
 
-def enrichir_depuis_etablissement(
-    p: Parapharmacie, etablissement: dict
-) -> Parapharmacie:
+def enrichir_depuis_etablissement(p: Parapharmacie, etablissement: dict) -> Parapharmacie:
     """Applique les données d'un établissement INSEE à un objet Parapharmacie."""
     unite_legale = etablissement.get("uniteLegale", {})
 
@@ -190,81 +191,45 @@ def enrichir_depuis_etablissement(
         unite_legale.get("nomUniteLegale") or ""
     )
 
-    # Scoring RapidFuzz pour valider la correspondance
-    score = fuzz.ratio(
-        p.nom.lower().strip(),
-        nom_legal.lower().strip()
-    )
+    score = fuzz.ratio(p.nom.lower().strip(), nom_legal.lower().strip())
 
     if score >= SEUIL_MATCH_AUTO:
-        p.siret = etablissement.get("siret", "")
-        p.nom_legal = nom_legal
-        p.dirigeant = extraire_dirigeant(unite_legale)
-        p.statut_juridique = unite_legale.get("categorieJuridiqueUniteLegale", "")
-        p.date_creation = unite_legale.get("dateCreationUniteLegale", "")
-        p.etat_administratif = etablissement.get("etatAdministratifEtablissement", "")
-        p.confiance_match = score
-        p.statut_match = "AUTO"
+        statut = "AUTO"
     elif score >= SEUIL_MATCH_PROBABLE:
-        p.siret = etablissement.get("siret", "")
-        p.nom_legal = nom_legal
-        p.dirigeant = extraire_dirigeant(unite_legale)
-        p.statut_juridique = unite_legale.get("categorieJuridiqueUniteLegale", "")
-        p.date_creation = unite_legale.get("dateCreationUniteLegale", "")
-        p.etat_administratif = etablissement.get("etatAdministratifEtablissement", "")
-        p.confiance_match = score
-        p.statut_match = "A_VERIFIER"
+        statut = "A_VERIFIER"
     else:
         p.siret = ""
         p.confiance_match = 0
         p.statut_match = "NON_TROUVE"
-        logger.info(f"Matching insuffisant pour '{p.nom}' vs '{nom_legal}' : score={score}")
+        logger.info(f"Matching insuffisant '{p.nom}' vs '{nom_legal}' : score={score}")
+        return p
 
+    p.siret = etablissement.get("siret", "")
+    p.nom_legal = nom_legal
+    p.dirigeant = extraire_dirigeant(unite_legale)
+    p.statut_juridique = unite_legale.get("categorieJuridiqueUniteLegale", "")
+    p.date_creation = unite_legale.get("dateCreationUniteLegale", "")
+    p.etat_administratif = etablissement.get("etatAdministratifEtablissement", "")
+    p.confiance_match = score
+    p.statut_match = statut
     return p
 
 
-def enrichir(
-    parapharmacies: List[Parapharmacie],
-    zone: str = "",
-) -> List[Parapharmacie]:
+def enrichir(parapharmacies: List[Parapharmacie], zone: str = "") -> List[Parapharmacie]:
     """
-    Enrichit une liste de Parapharmacies avec les données INSEE Sirene.
-    Si la clé API est absente, affiche les instructions et passe la phase.
+    Enrichit les Parapharmacies avec les données INSEE Sirene.
+    Fonctionne en accès public (sans clé) ou avec OAuth2 si INSEE_API_KEY est définie.
     """
-    if not INSEE_API_KEY:
-        print(INSTRUCTIONS_CLE)
-        print("  [INSEE] Phase ignorée : INSEE_API_KEY non configurée dans config.py")
-        logger.warning("INSEE ignoré : clé API absente")
-        for p in parapharmacies:
-            if not p.statut_match:
-                p.statut_match = "INSEE_NON_CONFIGURE"
-        return parapharmacies
-
-    # Supporter le format "key:secret" ou juste "key"
-    if ":" in INSEE_API_KEY:
-        api_key, api_secret = INSEE_API_KEY.split(":", 1)
-    else:
-        api_key = api_secret = INSEE_API_KEY
-
-    gestionnaire = GestionnaireRequetesINSEE(api_key, api_secret)
-
-    if not gestionnaire.renouveler_token_si_necessaire():
-        print("  [INSEE] Authentification échouée, phase ignorée")
-        return parapharmacies
+    gestionnaire = GestionnaireRequetesINSEE()
+    gestionnaire.preparer()
 
     total = len(parapharmacies)
     enrichis = 0
 
     for i, p in enumerate(parapharmacies):
         print(f"  [INSEE {i+1}/{total}] {p.nom[:45]:<45}", end="\r")
-        logger.debug(f"INSEE recherche : '{p.nom}' ({p.code_postal})")
 
-        if not p.nom:
-            p.statut_match = "NON_TROUVE"
-            continue
-
-        if not p.code_postal:
-            logger.info(f"Pas de code postal pour '{p.nom}', skip INSEE")
+        if not p.nom or not p.code_postal:
             p.statut_match = "NON_TROUVE"
             continue
 
@@ -275,30 +240,21 @@ def enrichir(
             parapharmacies[i] = p
             if p.siret:
                 enrichis += 1
-                logger.info(
-                    f"INSEE OK : '{p.nom}' → SIRET={p.siret} "
-                    f"(score={p.confiance_match}, statut={p.statut_match})"
-                )
+                logger.info(f"INSEE OK : '{p.nom}' → SIRET={p.siret} (score={p.confiance_match})")
         else:
             p.confiance_match = 0
             p.statut_match = "NON_TROUVE"
             parapharmacies[i] = p
 
-        # Sauvegarde progressive toutes les 10 entrées
         if (i + 1) % 10 == 0 and zone:
             sauvegarder_progression(parapharmacies, zone, 2)
 
-    print()  # Saut de ligne après la progression
+    print()
 
-    # Statistiques finales
     auto = sum(1 for p in parapharmacies if p.statut_match == "AUTO")
     a_verifier = sum(1 for p in parapharmacies if p.statut_match == "A_VERIFIER")
     non_trouves = sum(1 for p in parapharmacies if p.statut_match == "NON_TROUVE")
-
-    logger.info(
-        f"INSEE terminé : AUTO={auto}, A_VERIFIER={a_verifier}, "
-        f"NON_TROUVE={non_trouves}, total={total}"
-    )
+    logger.info(f"INSEE terminé : AUTO={auto}, A_VERIFIER={a_verifier}, NON_TROUVE={non_trouves}")
 
     if zone:
         sauvegarder_progression(parapharmacies, zone, 2)
@@ -313,10 +269,7 @@ if __name__ == "__main__":
     print("  TEST MODULE INSEE — Lyon")
     print("=" * 55)
 
-    # Charger les données OSM depuis le cache
-    fichiers_cache = glob.glob(
-        os.path.join(BASE_DIR, "cache", "osm_lyon_*.json")
-    )
+    fichiers_cache = glob.glob(os.path.join(BASE_DIR, "cache", "osm_lyon_*.json"))
 
     if not fichiers_cache:
         print("  [INFO] Cache OSM absent, lancement du module OSM...")
@@ -339,13 +292,15 @@ if __name__ == "__main__":
     auto = sum(1 for p in donnees_enrichies if p.statut_match == "AUTO")
     a_verifier = sum(1 for p in donnees_enrichies if p.statut_match == "A_VERIFIER")
     non_trouve = sum(1 for p in donnees_enrichies if p.statut_match == "NON_TROUVE")
-    non_config = sum(1 for p in donnees_enrichies if p.statut_match == "INSEE_NON_CONFIGURE")
 
-    print(f"  Total                : {total}")
-    print(f"  Avec SIRET           : {avec_siret} ({avec_siret/total*100:.1f}%)" if total else "  Avec SIRET : 0")
-    print(f"  Match AUTO           : {auto}")
-    print(f"  À vérifier           : {a_verifier}")
-    print(f"  Non trouvé           : {non_trouve}")
-    if non_config:
-        print(f"  INSEE non configuré  : {non_config}")
+    print(f"  Total       : {total}")
+    print(f"  Avec SIRET  : {avec_siret} ({avec_siret/total*100:.1f}%)" if total else "")
+    print(f"  AUTO        : {auto}")
+    print(f"  À vérifier  : {a_verifier}")
+    print(f"  Non trouvé  : {non_trouve}")
+
+    print(f"\n  Détail :")
+    for p in donnees_enrichies:
+        siret = p.siret or "—"
+        print(f"  {p.nom[:40]:<40} → SIRET={siret} [{p.statut_match}]")
     print(f"{'=' * 55}")
