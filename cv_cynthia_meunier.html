@@ -63,7 +63,7 @@ nav{
 .nav-cta:hover{background:var(--bd);transform:translateY(-1px);box-shadow:0 4px 18px rgba(123,18,48,.45)}
 
 /* ══ HERO ══ */
-#home-section{padding-top:62px;min-height:100vh;background:var(--b);overflow:hidden;position:relative}
+#home-section{padding-top:62px;min-height:100vh;background:var(--cream);overflow:hidden;position:relative}
 .hero{
   max-width:1280px;margin:0 auto;
   display:grid;grid-template-columns:1fr 440px;
@@ -85,30 +85,30 @@ nav{
 .hero-left::before{
   content:'';position:absolute;left:0;top:8%;bottom:8%;
   width:2px;
-  background:linear-gradient(to bottom,transparent,rgba(255,255,255,.3) 25%,rgba(255,255,255,.45) 75%,transparent);
+  background:linear-gradient(to bottom,transparent,var(--b) 25%,var(--bm) 75%,transparent);
 }
 .h-ey{
   font-size:.63rem;font-weight:600;letter-spacing:.24em;text-transform:uppercase;
-  color:rgba(255,255,255,.75);margin-bottom:1.75rem;display:flex;align-items:center;gap:10px;
+  color:var(--b);margin-bottom:1.75rem;display:flex;align-items:center;gap:10px;
 }
-.h-ey::after{content:'';width:32px;height:1px;background:rgba(255,255,255,.4)}
+.h-ey::after{content:'';width:32px;height:1px;background:var(--gold)}
 .h-name{
   font-family:'Cormorant Garamond',serif;
   font-size:clamp(4rem,6.5vw,6.5rem);font-weight:400;
-  line-height:.92;letter-spacing:-.01em;color:var(--white);margin-bottom:.3rem;
+  line-height:.92;letter-spacing:-.01em;color:var(--ink);margin-bottom:.3rem;
 }
-.h-name em{display:block;font-style:italic;font-weight:300;color:var(--gold)}
+.h-name em{display:block;font-style:italic;font-weight:300;color:var(--b)}
 /* Gold decorative rule */
 .h-rule{
   display:flex;align-items:center;gap:12px;margin:2rem 0;
 }
-.h-rule-line{flex:1;max-width:56px;height:1.5px;background:rgba(255,255,255,.4)}
+.h-rule-line{flex:1;max-width:56px;height:1.5px;background:var(--gold)}
 .h-rule-diamond{
-  width:8px;height:8px;background:var(--gold);
+  width:8px;height:8px;background:var(--b);
   transform:rotate(45deg);flex-shrink:0;
 }
 .h-bio{
-  font-size:.9rem;font-weight:300;line-height:1.85;color:rgba(255,255,255,.82);
+  font-size:.9rem;font-weight:300;line-height:1.85;color:var(--gray);
   max-width:440px;margin-bottom:2.5rem;
 }
 /* Contact cards */
@@ -116,7 +116,7 @@ nav{
 .h-ci{
   display:flex;align-items:center;gap:.85rem;
   padding:.7rem 1rem;
-  background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);
+  background:var(--bu);border:1px solid rgba(123,18,48,.12);
   border-radius:10px;text-decoration:none;transition:all .2s;
 }
 .h-ci:hover{background:var(--bp);border-color:rgba(123,18,48,.25)}
@@ -126,19 +126,19 @@ nav{
   display:flex;align-items:center;justify-content:center;
   font-size:.82rem;flex-shrink:0;
 }
-.h-ci-text{font-size:.81rem;font-weight:500;color:rgba(255,255,255,.92)}
-.h-ci-sub{font-size:.68rem;font-weight:300;color:rgba(255,255,255,.5);margin-top:1px}
+.h-ci-text{font-size:.81rem;font-weight:500;color:var(--ink2)}
+.h-ci-sub{font-size:.68rem;font-weight:300;color:var(--glt);margin-top:1px}
 .h-btns{display:flex;gap:10px;flex-wrap:wrap}
 .btn-b{
   font-size:.78rem;font-weight:500;padding:.68rem 1.5rem;
-  background:white;color:var(--b);border:none;border-radius:100px;
+  background:var(--b);color:white;border:none;border-radius:100px;
   cursor:pointer;transition:all .2s;
 }
 .btn-b:hover{background:var(--bd);transform:translateY(-1px);box-shadow:0 4px 16px rgba(123,18,48,.3)}
 .btn-o{
   font-size:.78rem;font-weight:400;padding:.68rem 1.5rem;
-  background:rgba(255,255,255,.1);color:white;
-  border:1.5px solid rgba(255,255,255,.5);border-radius:100px;cursor:pointer;transition:all .2s;
+  background:transparent;color:var(--b);
+  border:1.5px solid var(--b);border-radius:100px;cursor:pointer;transition:all .2s;
 }
 .btn-o:hover{background:var(--bp)}
 /* Photo */
@@ -151,14 +151,14 @@ nav{
   position:absolute;
   top:24px;right:-24px;
   width:90%;height:92%;
-  background:linear-gradient(160deg,var(--gold),rgba(196,149,122,.7));
+  background:linear-gradient(160deg,var(--b),var(--bd));
   border-radius:24px;z-index:0;
-  opacity:.4;
+  opacity:.18;
 }
 .photo-border{
   position:absolute;
   top:-12px;left:-12px;right:12px;bottom:12px;
-  border:1.5px solid rgba(255,255,255,.3);
+  border:1.5px solid rgba(123,18,48,.2);
   border-radius:24px;z-index:0;
 }
 .h-photo{
