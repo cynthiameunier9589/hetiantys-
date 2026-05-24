@@ -63,7 +63,12 @@ nav{
 .nav-cta:hover{background:var(--bd);transform:translateY(-1px);box-shadow:0 4px 18px rgba(123,18,48,.45)}
 
 /* ══ HERO ══ */
-#home-section{padding-top:62px;min-height:100vh;background:var(--white);overflow:hidden}
+#home-section{padding-top:62px;min-height:100vh;background:var(--cream);overflow:hidden;position:relative}
+#home-section::before{
+  content:'';
+  position:absolute;inset:0;pointer-events:none;z-index:0;
+  background:linear-gradient(105deg,var(--bd) 0%,var(--b) 36%,rgba(123,18,48,.45) 50%,rgba(248,244,241,0) 62%);
+}
 .hero{
   max-width:1280px;margin:0 auto;
   display:grid;grid-template-columns:1fr 440px;
@@ -81,34 +86,34 @@ nav{
   pointer-events:none;
 }
 /* Bordeaux thin line left-edge */
-.hero-left{position:relative;padding-left:2.5rem}
+.hero-left{position:relative;padding-left:2.5rem;z-index:1}
 .hero-left::before{
   content:'';position:absolute;left:0;top:8%;bottom:8%;
   width:2px;
-  background:linear-gradient(to bottom,transparent,var(--b) 25%,var(--bm) 75%,transparent);
+  background:linear-gradient(to bottom,transparent,rgba(255,255,255,.3) 25%,rgba(255,255,255,.45) 75%,transparent);
 }
 .h-ey{
   font-size:.63rem;font-weight:600;letter-spacing:.24em;text-transform:uppercase;
-  color:var(--b);margin-bottom:1.75rem;display:flex;align-items:center;gap:10px;
+  color:rgba(255,255,255,.75);margin-bottom:1.75rem;display:flex;align-items:center;gap:10px;
 }
-.h-ey::after{content:'';width:32px;height:1px;background:var(--gold)}
+.h-ey::after{content:'';width:32px;height:1px;background:rgba(255,255,255,.4)}
 .h-name{
   font-family:'Cormorant Garamond',serif;
   font-size:clamp(4rem,6.5vw,6.5rem);font-weight:400;
-  line-height:.92;letter-spacing:-.01em;color:var(--ink);margin-bottom:.3rem;
+  line-height:.92;letter-spacing:-.01em;color:var(--white);margin-bottom:.3rem;
 }
-.h-name em{display:block;font-style:italic;font-weight:300;color:var(--b)}
+.h-name em{display:block;font-style:italic;font-weight:300;color:var(--gold)}
 /* Gold decorative rule */
 .h-rule{
   display:flex;align-items:center;gap:12px;margin:2rem 0;
 }
-.h-rule-line{flex:1;max-width:56px;height:1.5px;background:var(--gold)}
+.h-rule-line{flex:1;max-width:56px;height:1.5px;background:rgba(255,255,255,.4)}
 .h-rule-diamond{
-  width:8px;height:8px;background:var(--b);
+  width:8px;height:8px;background:var(--gold);
   transform:rotate(45deg);flex-shrink:0;
 }
 .h-bio{
-  font-size:.9rem;font-weight:300;line-height:1.85;color:var(--gray);
+  font-size:.9rem;font-weight:300;line-height:1.85;color:rgba(255,255,255,.82);
   max-width:440px;margin-bottom:2.5rem;
 }
 /* Contact cards */
@@ -116,7 +121,7 @@ nav{
 .h-ci{
   display:flex;align-items:center;gap:.85rem;
   padding:.7rem 1rem;
-  background:var(--bu);border:1px solid rgba(123,18,48,.12);
+  background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);
   border-radius:10px;text-decoration:none;transition:all .2s;
 }
 .h-ci:hover{background:var(--bp);border-color:rgba(123,18,48,.25)}
@@ -126,23 +131,23 @@ nav{
   display:flex;align-items:center;justify-content:center;
   font-size:.82rem;flex-shrink:0;
 }
-.h-ci-text{font-size:.81rem;font-weight:500;color:var(--ink2)}
-.h-ci-sub{font-size:.68rem;font-weight:300;color:var(--glt);margin-top:1px}
+.h-ci-text{font-size:.81rem;font-weight:500;color:rgba(255,255,255,.92)}
+.h-ci-sub{font-size:.68rem;font-weight:300;color:rgba(255,255,255,.5);margin-top:1px}
 .h-btns{display:flex;gap:10px;flex-wrap:wrap}
 .btn-b{
   font-size:.78rem;font-weight:500;padding:.68rem 1.5rem;
-  background:var(--b);color:white;border:none;border-radius:100px;
+  background:white;color:var(--b);border:none;border-radius:100px;
   cursor:pointer;transition:all .2s;
 }
 .btn-b:hover{background:var(--bd);transform:translateY(-1px);box-shadow:0 4px 16px rgba(123,18,48,.3)}
 .btn-o{
   font-size:.78rem;font-weight:400;padding:.68rem 1.5rem;
-  background:transparent;color:var(--b);
-  border:1.5px solid var(--b);border-radius:100px;cursor:pointer;transition:all .2s;
+  background:rgba(255,255,255,.1);color:white;
+  border:1.5px solid rgba(255,255,255,.5);border-radius:100px;cursor:pointer;transition:all .2s;
 }
 .btn-o:hover{background:var(--bp)}
 /* Photo */
-.hero-photo-col{position:relative;display:flex;justify-content:center}
+.hero-photo-col{position:relative;display:flex;justify-content:center;z-index:1}
 .photo-wrap{
   position:relative;width:100%;max-width:400px;
 }
@@ -546,7 +551,7 @@ nav{
         <div class="h-rule-diamond"></div>
         <div class="h-rule-line" style="max-width:28px"></div>
       </div>
-      <p class="h-bio">Étudiante en Bachelor Commerce à l'ESDES Business School de Lyon. Mon aisance relationnelle m'a guidée vers le commerce, et mon intérêt pour la santé me pousse vers des entreprises qui ont du sens.</p>
+      <p class="h-bio">Étudiante en 3e année à ESDES Business School, je recherche une alternance dans les domaines du développement commercial et de la gestion de projet. Grâce à mes expériences en vente, prospection et relation client, j'ai développé une forte aisance relationnelle, un bon sens de l'organisation ainsi qu'une réelle capacité d'adaptation. Motivée par les défis commerciaux, je souhaite m'investir dans une entreprise où je pourrai contribuer au développement de l'activité et à la satisfaction client.</p>
       <div class="h-contacts">
         <a class="h-ci" href="tel:0758513203">
           <div class="h-ci-icon">📞</div>
